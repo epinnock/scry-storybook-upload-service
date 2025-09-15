@@ -7,15 +7,29 @@ name = "storybook-deployment-service"
 main = "src/entry.worker.ts"
 
 # Specifies the version of the Workers runtime APIs to use.
-# This ensures that future breaking changes in the runtime do not affect the application.
 compatibility_date = "2024-03-01"
 
 # Defines the bindings to other Cloudflare resources.
 [[r2_buckets]]
 # The variable name used to access the binding in the code (c.env.STORYBOOK_BUCKET).
-# This MUST match the property name defined in the `Bindings` type in entry.worker.ts.
 binding = "STORYBOOK_BUCKET"
 # The name of the actual R2 bucket in the Cloudflare dashboard.
 bucket_name = "my-storybooks-production"
 # For local development, a preview bucket can be specified.
 preview_bucket_name = "my-storybooks-staging"
+
+# --- Environment Variables and Secrets ---
+# The following variables are required for the S3-compatible API to work.
+# For local development with `wrangler dev`, you can define them in this `.dev.vars` file.
+# For production, you must set these as secrets using the `wrangler secret put` command.
+# Example: `wrangler secret put R2_ACCOUNT_ID`
+
+[vars]
+# These are placeholders. Replace them with your actual R2 credentials for local testing.
+R2_ACCOUNT_ID = "your-account-id"
+R2_BUCKET_NAME = "my-storybooks-production"
+# Note: It's not recommended to put secrets directly in this file.
+# Use `.dev.vars` for local development, which is ignored by git.
+# For this example, we are showing what variables are needed.
+# R2_S3_ACCESS_KEY_ID = "your-access-key-id"
+# R2_S3_SECRET_ACCESS_KEY = "your-secret-access-key"

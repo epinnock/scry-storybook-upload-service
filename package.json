@@ -5,6 +5,7 @@
   "main": "dist/entry.node.js",
   "scripts": {
     "build": "tsc",
+    "test": "vitest run",
     "start:node": "node dist/entry.node.js",
     "dev:worker": "wrangler dev",
     "deploy:worker": "wrangler deploy"
@@ -30,6 +31,8 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250913.0",
     "@types/node": "^24.4.0",
-    "typescript": "^5.9.2"
+    "jest-mock": "^30.0.5",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
   }
 }
