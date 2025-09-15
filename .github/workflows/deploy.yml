@@ -1,0 +1,65 @@
+# In .github/workflows/deploy.yml
+
+name: Deploy Service
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  deploy-worker:
+    runs-on: ubuntu-latest
+    name: Deploy to Cloudflare Workers
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Yarn
+        run: npm install -g yarn
+
+      - name: Install Dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # The 'command' defaults to 'deploy', which is what is needed here.
+          # It will automatically use the wrangler.toml file from the repository root.
+
+
+  build-and-push-docker:
+    runs-on: ubuntu-latest
+    name: Build and Push Docker Image
+    # Grant permissions for the GITHUB_TOKEN to push to the GitHub Container Registry.
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{ github.repository }}:latest
+          # Pass build arguments for any secrets needed during the build process (if any).
+          # secrets: |
+          #   "NPM_TOKEN=${{ secrets.NPM_TOKEN }}"

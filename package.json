@@ -1,0 +1,35 @@
+{
+  "name": "portable-storybook-service",
+  "version": "1.0.0",
+  "description": "A portable Storybook upload service for Cloudflare Workers and Node.js",
+  "main": "dist/entry.node.js",
+  "scripts": {
+    "build": "tsc",
+    "start:node": "node dist/entry.node.js",
+    "dev:worker": "wrangler dev",
+    "deploy:worker": "wrangler deploy"
+  },
+  "keywords": [
+    "hono",
+    "cloudflare-workers",
+    "docker",
+    "node",
+    "portable"
+  ],
+  "author": "Jules",
+  "license": "MIT",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.888.0",
+    "@aws-sdk/lib-storage": "^3.888.0",
+    "@aws-sdk/s3-request-presigner": "^3.888.0",
+    "@hono/node-server": "^1.19.2",
+    "dotenv": "^17.2.2",
+    "hono": "^4.9.7",
+    "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250913.0",
+    "@types/node": "^24.4.0",
+    "typescript": "^5.9.2"
+  }
+}

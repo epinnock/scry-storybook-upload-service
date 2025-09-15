@@ -1,0 +1,44 @@
+// In src/services/storage/storage.service.ts
+
+/**
+ * Represents the result of a successful file upload operation.
+ */
+export interface UploadResult {
+  /**
+   * A publicly accessible or internal URL to the uploaded object.
+   */
+  url: string;
+  /**
+   * The full path (key) of the object within the storage bucket.
+   */
+  path: string;
+  /**
+   * The version ID of the object, if versioning is enabled.
+   */
+  versionId?: string;
+}
+
+/**
+ * Defines the contract for all storage operations within the application.
+ * Any class implementing this interface can be used as the storage backend.
+ */
+export interface StorageService {
+  /**
+   * Uploads a file to the storage backend.
+   * @param key The destination key (path) for the object.
+   * @param body The content of the file as a ReadableStream or Buffer.
+   * @param contentType The MIME type of the file.
+   * @returns A promise that resolves to an UploadResult.
+   */
+  upload(key: string, body: ReadableStream | Buffer, contentType: string): Promise<UploadResult>;
+
+  /**
+   * Generates a presigned URL that allows a client to upload a file directly.
+   * @param key The destination key (path) for the object.
+   * @param contentType The expected MIME type of the file.
+   * @returns A promise that resolves to an object containing the upload URL and the final key.
+   */
+  getPresignedUploadUrl(key: string, contentType: string): Promise<{ url: string; key: string }>;
+
+  // Other methods like delete, get, list can be added here as needed.
+}
