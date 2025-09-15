@@ -1,0 +1,21 @@
+# In wrangler.toml
+
+# A user-friendly name for the Worker service.
+name = "storybook-deployment-service"
+
+# The entry point file for the Worker.
+main = "src/entry.worker.ts"
+
+# Specifies the version of the Workers runtime APIs to use.
+# This ensures that future breaking changes in the runtime do not affect the application.
+compatibility_date = "2024-03-01"
+
+# Defines the bindings to other Cloudflare resources.
+[[r2_buckets]]
+# The variable name used to access the binding in the code (c.env.STORYBOOK_BUCKET).
+# This MUST match the property name defined in the `Bindings` type in entry.worker.ts.
+binding = "STORYBOOK_BUCKET"
+# The name of the actual R2 bucket in the Cloudflare dashboard.
+bucket_name = "my-storybooks-production"
+# For local development, a preview bucket can be specified.
+preview_bucket_name = "my-storybooks-staging"
