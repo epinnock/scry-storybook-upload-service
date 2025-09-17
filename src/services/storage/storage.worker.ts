@@ -1,60 +1,75 @@
 // In src/services/storage/storage.worker.ts
 
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { StorageService, UploadResult } from './storage.service';
 
+// Define the shape of the configuration object, similar to the Node.js version.
+type R2Config = {
+  accountId: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  bucketName: string;
+};
+
 /**
- * A StorageService implementation that uses a native Cloudflare R2 bucket binding.
+ * A StorageService implementation for Cloudflare Workers that uses a hybrid approach:
+ * - Native R2 bindings for efficient uploads initiated by the Worker.
+ * - The S3 SDK for generating presigned URLs for client-side uploads.
  */
-export class R2BindingStorageService implements StorageService {
+export class R2S3StorageService implements StorageService {
   private readonly bucket: R2Bucket;
+  private readonly s3: S3Client;
+  private readonly bucketName: string;
+  private readonly publicUrlBase: string;
 
   /**
    * @param bucket The R2Bucket instance provided by the Cloudflare runtime.
+   * @param config The R2 S3-compatible API configuration.
    */
-  constructor(bucket: R2Bucket) {
+  constructor(bucket: R2Bucket, config: R2Config) {
     this.bucket = bucket;
+    this.bucketName = config.bucketName;
+    this.s3 = new S3Client({
+      region: 'auto',
+      endpoint: `https://${config.accountId}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId: config.accessKeyId,
+        secretAccessKey: config.secretAccessKey,
+      },
+    });
+    // This assumes a public bucket or a custom domain is configured.
+    this.publicUrlBase = `https://pub-${config.bucketName}.${config.accountId}.r2.dev`;
   }
 
   /**
-   * Uploads a file stream directly to the R2 bucket.
+   * Uploads a file stream directly to the R2 bucket using the native binding.
+   * This is efficient for uploads that are proxied through the Worker.
    */
   async upload(key: string, body: ReadableStream, contentType: string): Promise<UploadResult> {
-    // The blueprint code for `upload` has a small issue. The body can be a Buffer, but R2's `put` method
-    // with a stream expects a ReadableStream. The Node.js stream is not the same as the web stream.
-    // However, in the context of a worker, the body will be a ReadableStream from the request.
-    // The `upload` method signature accepts `ReadableStream | Buffer`.
-    // The `R2Bucket.put` method accepts `ReadableStream | ArrayBuffer | string | Blob`.
-    // I will assume the body is a ReadableStream as it comes from `c.req.body`.
-    // The type signature from the interface is `ReadableStream | Buffer`. In the worker context,
-    // we can assume it's a ReadableStream.
-    const object = await this.bucket.put(key, body as ReadableStream, {
+    const object = await this.bucket.put(key, body, {
       httpMetadata: { contentType },
     });
 
-    // In a production scenario, you would construct a URL based on a public R2 domain
-    // or a custom domain mapped to the bucket.
-    const publicUrl = `/r2-assets/${object.key}`;
-
     return {
-      url: publicUrl,
+      url: `${this.publicUrlBase}/${object.key}`,
       path: object.key,
       versionId: object.version,
     };
   }
 
   /**
-   * This implementation for generating a presigned URL is a placeholder.
-   * R2 bindings do not have a built-in method for creating S3-style presigned URLs.
-   * A true implementation would require either making an authenticated API call to the
-   * R2 S3 API from the Worker, or using a different upload strategy for this target.
-   * For simplicity in this architecture, we assume direct uploads to the API endpoint.
+   * Generates a presigned URL using the S3 API, allowing a client to upload directly to R2.
    */
   async getPresignedUploadUrl(key: string, contentType: string): Promise<{ url: string; key: string }> {
-    // NOTE: This is a significant architectural consideration.
-    // Native R2 bindings do not support presigned URL generation.
-    // The Node.js target (using the S3 API) is better suited for this pattern.
-    // For Workers, direct POST/PUT uploads to the API endpoint are more common.
-    console.warn('getPresignedUploadUrl is not natively supported via R2 bindings.');
-    throw new Error('Method not implemented for R2 bindings.');
+    const command = new PutObjectCommand({
+      Bucket: this.bucketName,
+      Key: key,
+      ContentType: contentType,
+    });
+
+    const signedUrl = await getSignedUrl(this.s3, command, { expiresIn: 3600 }); // URL valid for 1 hour
+
+    return { url: signedUrl, key: key };
   }
 }

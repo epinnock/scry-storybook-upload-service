@@ -2,7 +2,7 @@
 
 import { Hono } from 'hono';
 import { app } from './app';
-import { R2BindingStorageService } from './services/storage/storage.worker';
+import { R2S3StorageService } from './services/storage/storage.worker';
 import type { AppEnv } from './app';
 
 /**
@@ -13,9 +13,12 @@ type Bindings = {
   // This binding provides access to the R2 bucket for storybooks.
   STORYBOOK_BUCKET: R2Bucket;
 
-  // Example of other potential bindings
-  // API_SECRET: string;
-  // METADATA_DB: D1Database;
+  // These are the secrets required for the S3-compatible API.
+  // They should be set in the wrangler.toml or via the Cloudflare dashboard.
+  R2_ACCOUNT_ID: string;
+  R2_S3_ACCESS_KEY_ID: string;
+  R2_S3_SECRET_ACCESS_KEY: string;
+  R2_BUCKET_NAME: string;
 };
 
 // Create a new Hono instance specifically for the Worker, extending the shared AppEnv.
@@ -24,13 +27,23 @@ const workerApp = new Hono<AppEnv & { Bindings: Bindings }>();
 /**
  * This top-level middleware is executed for every request.
  * It instantiates the Worker-specific storage service using the R2 binding
- * from the environment and injects it into the context as 'storage'.
+ * and S3 credentials from the environment, then injects it into the context.
  */
 workerApp.use('*', async (c, next) => {
-  // The R2Bucket is accessed safely from c.env.
-  const storageService = new R2BindingStorageService(c.env.STORYBOOK_BUCKET);
-  // c.set is used to place the service instance into the context's variable store.
+  // Assemble the configuration for the S3 client from environment variables.
+  const r2Config = {
+    accountId: c.env.R2_ACCOUNT_ID,
+    accessKeyId: c.env.R2_S3_ACCESS_KEY_ID,
+    secretAccessKey: c.env.R2_S3_SECRET_ACCESS_KEY,
+    bucketName: c.env.R2_BUCKET_NAME,
+  };
+
+  // Instantiate the hybrid storage service with both the native binding and the S3 config.
+  const storageService = new R2S3StorageService(c.env.STORYBOOK_BUCKET, r2Config);
+
+  // Place the service instance into the context for downstream handlers.
   c.set('storage', storageService);
+
   await next();
 });
 
@@ -43,6 +56,4 @@ workerApp.route('/', app);
  */
 export default {
   fetch: workerApp.fetch,
-  // Other handlers like 'scheduled' for cron triggers could be added here.
-  // scheduled: async (event, env, ctx) => {... }
 };
