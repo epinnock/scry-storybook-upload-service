@@ -10,18 +10,18 @@ WORKDIR /usr/src/app
 # This stage is dedicated to installing ONLY production dependencies.
 # This creates a clean node_modules directory that can be copied to the final image.
 FROM base AS deps
-COPY package.json yarn.lock* ./
-RUN yarn install --production --frozen-lockfile
+COPY package.json pnpm-lock.yaml* ./
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --prod --frozen-lockfile
 
 # ---- Builder Stage ----
 # This stage installs all dependencies (including devDependencies) and builds the TypeScript application.
 FROM base AS builder
-COPY package.json yarn.lock* ./
-RUN yarn install --frozen-lockfile
+COPY package.json pnpm-lock.yaml* ./
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
 # Copy the rest of the source code.
 COPY . .
 # Run the build script defined in package.json (e.g., "tsc").
-RUN yarn build
+RUN pnpm build
 
 # ---- Production Stage ----
 # This is the final, minimal image that will be deployed.
