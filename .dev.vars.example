@@ -1,0 +1,8 @@
+# Cloudflare Workers Development Variables
+# These are used for local development with wrangler dev
+# Note: R2 bucket bindings are automatically available in the Workers runtime
+# This file is used for any additional variables not provided by bindings
+
+# Example of other potential bindings (these are not currently used in the code)
+# R2_S3_ACCESS_KEY_ID = "your-access-key-id"
+# R2_S3_SECRET_ACCESS_KEY = "your-secret-access-key"
