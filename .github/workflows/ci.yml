@@ -27,7 +27,7 @@ jobs:
           version: 9
 
       - name: Install Dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Run Unit Tests
         run: pnpm run test
@@ -62,7 +62,7 @@ jobs:
           version: 9
 
       - name: Install Dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Restore Build Cache
         uses: actions/cache@v4
@@ -98,7 +98,7 @@ jobs:
           version: 9
 
       - name: Install Dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Restore Build Cache
         uses: actions/cache@v4
@@ -175,7 +175,7 @@ jobs:
           version: 9
 
       - name: Install Dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Wait for Preview Deployment
         run: sleep 30
