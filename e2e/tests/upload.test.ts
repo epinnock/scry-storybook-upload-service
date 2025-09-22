@@ -50,7 +50,7 @@ describe('E2E Upload Tests', () => {
 
       beforeAll(async () => {
         ctx = await setupTestEnv(adapter, target);
-      });
+      }, 30000);
 
       afterAll(async () => {
         await cleanupTestEnv(ctx);
@@ -145,7 +145,7 @@ describe('E2E Upload Tests', () => {
 
       beforeAll(async () => {
         ctx = await setupTestEnv(adapter, target);
-      });
+      }, 30000);
 
       afterAll(async () => {
         await cleanupTestEnv(ctx);

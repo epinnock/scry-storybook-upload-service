@@ -50,8 +50,26 @@ export class NodeAdapter implements TestAdapter {
 
   async cleanup(config: E2EConfig): Promise<void> {
     if (this.serverProcess) {
+      // First try graceful shutdown
       this.serverProcess.kill('SIGTERM');
+      
+      // Wait for process to exit
+      const exitPromise = new Promise<void>((resolve) => {
+        this.serverProcess?.on('exit', () => resolve());
+        // Force kill after 5 seconds if not exited
+        setTimeout(() => {
+          if (this.serverProcess && !this.serverProcess.killed) {
+            this.serverProcess.kill('SIGKILL');
+          }
+          resolve();
+        }, 5000);
+      });
+      
+      await exitPromise;
       this.serverProcess = null;
+      
+      // Additional delay to ensure port is fully released
+      await new Promise(resolve => setTimeout(resolve, 2000));
     }
   }
 }

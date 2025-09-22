@@ -36,6 +36,8 @@
     "@aws-sdk/lib-storage": "^3.888.0",
     "@aws-sdk/s3-request-presigner": "^3.888.0",
     "@hono/node-server": "^1.19.2",
+    "@hono/swagger-ui": "^0.5.2",
+    "@hono/zod-openapi": "^1.1.2",
     "dotenv": "^17.2.2",
     "hono": "^4.9.7",
     "zod": "^4.1.8"
@@ -43,21 +45,25 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250913.0",
     "@types/node": "^24.4.0",
+    "concurrently": "^9.1.2",
     "jest-mock": "^30.0.5",
     "supertest": "^7.0.0",
     "typescript": "^5.9.2",
     "vitest": "^3.2.4",
-    "wait-on": "^8.0.1",
-    "concurrently": "^9.1.2"
+    "wait-on": "^8.0.1"
   },
   "vitest": {
     "test": {
       "environment": "node",
-      "reporters": ["default"]
+      "reporters": [
+        "default"
+      ]
     },
     "e2e": {
       "environment": "node",
-      "reporters": ["json"]
+      "reporters": [
+        "json"
+      ]
     }
   }
 }
