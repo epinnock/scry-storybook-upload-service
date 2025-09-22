@@ -60,41 +60,57 @@ export async function setupTestEnv(adapter: TestAdapter, target: DeploymentTarge
   };
 }
 
-export async function cleanupTestEnv(context: TestContext): Promise<void> {
-  if (context.config.cleanupOnFinish) {
+export async function cleanupTestEnv(context: TestContext | undefined): Promise<void> {
+  // Handle undefined context gracefully
+  if (!context) {
+    console.log('Cleanup skipped: context is undefined');
+    return;
+  }
+
+  if (context.config?.cleanupOnFinish) {
     await context.adapter.cleanup(context.config);
   }
 
   // Clean up local temp files
-  context.uploadedFiles.forEach(file => {
+  context.uploadedFiles?.forEach(file => {
     if (fs.existsSync(file)) {
       fs.unlinkSync(file);
     }
   });
 
   // Clean up storage data via API if prefixes are tracked
-  for (const prefix of context.cleanupPrefixes) {
+  for (const prefix of context.cleanupPrefixes || []) {
     const projectVersion = prefix.replace('/', ''); // Extract project/version from prefix
     const [project, version] = projectVersion.split('/');
-    const response = await context.client(`/cleanup/${project}/${version}`, {
-      method: 'DELETE',
-      headers: {
-        'X-Test-Cleanup': 'true',
-      },
-    });
+    
+    try {
+      const response = await context.client(`/cleanup/${project}/${version}`, {
+        method: 'DELETE',
+        headers: {
+          'X-Test-Cleanup': 'true',
+        },
+      });
 
-    if (response.status !== 200) {
-      console.warn(`Cleanup failed for prefix ${prefix}: ${response.status}`);
+      if (response.status !== 200) {
+        console.warn(`Cleanup failed for prefix ${prefix}: ${response.status}`);
+      }
+    } catch (error) {
+      console.warn(`Cleanup error for prefix ${prefix}:`, error);
     }
   }
 }
 
 // Vitest hooks wrapper
 export function withTestEnv(adapter: TestAdapter, target: DeploymentTarget, testFn: (ctx: TestContext) => void | Promise<void>) {
-  let ctx: TestContext;
+  let ctx: TestContext | undefined;
 
   beforeAll(async () => {
-    ctx = await setupTestEnv(adapter, target);
+    try {
+      ctx = await setupTestEnv(adapter, target);
+    } catch (error) {
+      console.warn(`Failed to setup test environment for ${target}:`, error);
+      ctx = undefined;
+    }
   });
 
   afterAll(async () => {
@@ -103,6 +119,9 @@ export function withTestEnv(adapter: TestAdapter, target: DeploymentTarget, test
 
   describe(`E2E Tests for ${target}`, () => {
     it('should run tests in this environment', async () => {
+      if (!ctx) {
+        throw new Error(`Test environment setup failed for ${target}`);
+      }
       await testFn(ctx);
     });
   });
