@@ -1,4 +1,4 @@
-// In src/services/storage/storage.service.ts
+import { Readable } from 'stream';
 
 /**
  * Represents the result of a successful file upload operation.
@@ -41,4 +41,11 @@ export interface StorageService {
   getPresignedUploadUrl(key: string, contentType: string): Promise<{ url: string; key: string }>;
 
   // Other methods like delete, get, list can be added here as needed.
+
+  /**
+   * Deletes all objects with keys matching the given prefix.
+   * @param prefix The prefix to match object keys (e.g., 'project/version/').
+   * @returns A promise that resolves when deletion is complete.
+   */
+  deleteByPrefix(prefix: string): Promise<void>;
 }

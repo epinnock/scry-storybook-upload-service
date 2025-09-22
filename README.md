@@ -173,6 +173,166 @@ wrangler deploy
 
 This will upload the worker and configure it according to your `wrangler.toml` file.
 
+## CI/CD Workflows
+
+This project includes comprehensive GitHub Actions workflows for automated testing, building, and deployment.
+
+### Overview
+
+The project uses a **two-workflow approach** to ensure code quality and safe deployments:
+
+1. **🔍 CI Validation** (`.github/workflows/ci.yml`) - Validates pull requests and feature branches
+2. **🚀 Production Deploy** (`.github/workflows/deploy.yml`) - Deploys to production after merge
+
+### Workflow Details
+
+#### CI Validation Workflow
+
+**Triggers:**
+- Pull requests to `main` branch
+- Pushes to feature branches (any branch except `main`)
+- Manual workflow dispatch
+
+**Jobs:**
+1. **Unit Tests & Build** - Runs `pnpm run test` and `pnpm run build`
+2. **E2E Tests (Local)** - Tests against local `wrangler dev` environment
+3. **Preview Deployment** - Deploys PR to staging environment
+4. **E2E Tests (Preview)** - Tests against live preview deployment
+5. **Code Quality** - TypeScript validation and code scanning
+
+**Preview Environments:**
+- Each PR gets a unique preview URL: `https://storybook-deployment-service-pr-{number}.scry-demo.workers.dev`
+- Preview deployments use the staging R2 bucket (`my-storybooks-staging`)
+- The workflow automatically comments on PRs with preview links
+
+#### Production Deploy Workflow
+
+**Triggers:**
+- Push to `main` branch (after PR merge)
+- Manual workflow dispatch
+
+**Jobs:**
+1. **Deploy Worker** - Builds, tests, deploys to production, and validates with E2E tests
+2. **Build Docker** - Builds and pushes Docker image to GitHub Container Registry
+
+### GitHub Secrets Setup
+
+The workflows require the following secrets to be configured in your repository settings (**Settings** → **Secrets and variables** → **Actions**):
+
+#### Required Secrets
+
+| Secret Name | Description | Example Value |
+|-------------|-------------|---------------|
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API token with Workers:Edit permission | `your-cloudflare-api-token` |
+| `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare account ID | `` |
+| `R2_S3_ACCESS_KEY_ID` | R2 S3-compatible access key | `` |
+| `R2_S3_SECRET_ACCESS_KEY` | R2 S3-compatible secret key | `` |
+| `R2_ACCOUNT_ID` | R2 account ID (same as Cloudflare account ID) | `` |
+| `R2_BUCKET_NAME` | Production R2 bucket name | `my-storybooks-production` |
+
+#### Setting Up Cloudflare API Token
+
+1. Go to [Cloudflare Dashboard](https://dash.cloudflare.com/)
+2. Click your profile → **My Profile** → **API Tokens**
+3. Click **Create Token** → Use **Edit Cloudflare Workers** template
+4. Configure permissions: `Cloudflare Workers:Edit`
+5. Set account and zone resources as needed
+6. Copy the token and add it as `CLOUDFLARE_API_TOKEN` secret
+
+### Branch Protection Rules
+
+To enforce code quality, set up branch protection rules for the `main` branch:
+
+1. Go to **Settings** → **Branches** in your GitHub repository
+2. Click **Add rule** for the `main` branch
+3. Enable the following settings:
+   - ✅ **Require status checks to pass before merging**
+   - ✅ **Require branches to be up to date before merging**
+   - ✅ **CI Complete** (select this required check)
+   - ✅ **Require pull request reviews before merging**
+   - ✅ **Dismiss stale PR approvals when new commits are pushed**
+
+### Development Workflow
+
+With the CI/CD system in place, the recommended development workflow is:
+
+#### 1. Feature Development
+```bash
+# Create and switch to feature branch
+git checkout -b feature/my-new-feature
+
+# Make your changes
+# ... edit files ...
+
+# Commit and push
+git add .
+git commit -m "feat: add new feature"
+git push origin feature/my-new-feature
+```
+
+#### 2. Pull Request Creation
+1. Create a pull request from your feature branch to `main`
+2. The CI workflow will automatically:
+   - Run unit tests and build checks
+   - Run E2E tests against local development environment
+   - Deploy a preview environment
+   - Run E2E tests against the preview deployment
+   - Comment on the PR with the preview URL
+
+#### 3. Code Review & Testing
+- Reviewers can test the feature using the preview URL
+- All CI checks must pass before the PR can be merged
+- The preview environment automatically updates when you push new commits
+
+#### 4. Merge to Production
+- Once approved and CI passes, merge the PR to `main`
+- The production deploy workflow automatically:
+  - Runs final tests and builds the project
+  - Deploys to Cloudflare Workers production environment
+  - Validates the deployment with E2E tests
+  - Builds and pushes a Docker image to GHCR
+
+### Monitoring Workflows
+
+#### Viewing Workflow Status
+- Go to the **Actions** tab in your GitHub repository
+- Monitor running workflows and view detailed logs
+- Failed workflows will block PR merges (when branch protection is enabled)
+
+#### Manual Workflow Triggers
+Both workflows support manual triggering via `workflow_dispatch`:
+- Go to **Actions** → Select workflow → **Run workflow**
+- Useful for testing or re-running deployments
+
+#### Troubleshooting Common Issues
+
+**❌ CI Workflow Fails:**
+- Check that all GitHub secrets are correctly configured
+- Verify R2 bucket permissions and credentials
+- Review the workflow logs for specific error messages
+
+**❌ Preview Deployment Issues:**
+- Ensure the staging R2 bucket (`my-storybooks-staging`) exists
+- Check Cloudflare API token permissions
+- Verify the `wrangler.toml` preview environment configuration
+
+**❌ Production Deployment Fails:**
+- Confirm production R2 bucket (`my-storybooks-production`) is accessible
+- Check Cloudflare Worker limits and quotas
+- Review E2E test failures in the workflow logs
+
+### Environment Configuration
+
+The project uses different environments for safe development:
+
+| Environment | Purpose | R2 Bucket | Worker Name |
+|-------------|---------|-----------|-------------|
+| **Local Development** | Developer machines | `my-storybooks-staging` | N/A (local) |
+| **PR Preview** | Pull request testing | `my-storybooks-staging` | `storybook-deployment-service-pr-{number}` |
+| **Production** | Live service | `my-storybooks-production` | `storybook-deployment-service` |
+
+This separation ensures that development and testing activities never interfere with production data.
+
 ## API Endpoints
 
 ### `POST /upload/:project/:version`
@@ -216,4 +376,197 @@ Generates a presigned URL that can be used for a direct client-side upload.
     ```
 
 The client can then use the returned `url` to `PUT` the file directly to the storage provider.
+
+## Enhanced Setup Guide
+
+### Environment Separation
+
+This project is configured to use different buckets for different environments to ensure safe development:
+
+- **Local Development**: Uses `my-storybooks-staging` bucket for both Node.js and Worker environments
+- **Production**: Uses `my-storybooks-production` bucket for deployed Worker
+
+### Credential Configuration
+
+#### Node.js Local Development (.env file)
+
+The `.env` file has been created with staging bucket credentials:
+
+```bash
+# .env (automatically configured)
+PORT=3000
+R2_ACCOUNT_ID=
+R2_S3_ACCESS_KEY_ID=
+R2_S3_SECRET_ACCESS_KEY=
+R2_BUCKET_NAME=
+```
+
+#### Worker Local Development (.dev.vars file)
+
+The `.dev.vars` file has been configured with staging bucket credentials:
+
+```bash
+# .dev.vars (automatically configured)
+R2_ACCOUNT_ID=""
+R2_S3_ACCESS_KEY_ID=""
+R2_S3_SECRET_ACCESS_KEY=""
+R2_BUCKET_NAME=""
+```
+
+#### Production Deployment
+
+For production, see `PRODUCTION_SETUP.md` for detailed instructions on setting Cloudflare Worker secrets.
+
+## Testing Guide
+
+### Prerequisites for Testing
+
+1. **Build the project**:
+   ```bash
+   yarn build
+   ```
+
+2. **Create a test zip file**:
+   ```bash
+   echo "test content" > test.txt
+   zip test.zip test.txt
+   ```
+
+### Testing Node.js Local Server
+
+#### 1. Start the Node.js server:
+```bash
+yarn start:node
+```
+
+#### 2. Test health check:
+```bash
+curl http://localhost:3000/
+```
+**Expected Response**: `200 OK` with health information
+
+#### 3. Test direct upload:
+```bash
+curl -X POST \
+  -H "Content-Type: application/zip" \
+  --data-binary @test.zip \
+  http://localhost:3000/upload/test-project/v1.0.0
+```
+**Expected Response**: `201 Created`
+```json
+{
+  "message": "Upload successful",
+  "data": {
+    "url": "https://pub-my-storybooks-staging.{userid}.r2.dev/test-project/v1.0.0/storybook.zip",
+    "path": "test-project/v1.0.0/storybook.zip",
+    "versionId": "..."
+  }
+}
+```
+
+#### 4. Test presigned URL generation:
+```bash
+curl -X POST \
+  -H "Content-Type: application/zip" \
+  http://localhost:3000/presigned-url/test-project/v1.0.0/storybook.zip
+```
+**Expected Response**: `200 OK`
+```json
+{
+  "url": "https://{userid}.r2.cloudflarestorage.com/my-storybooks-staging/test-project/v1.0.0/storybook.zip?...",
+  "key": "test-project/v1.0.0/storybook.zip"
+}
+```
+
+#### 5. Test file upload using presigned URL:
+```bash
+# First, get the presigned URL (save the response)
+PRESIGNED_RESPONSE=$(curl -s -X POST \
+  -H "Content-Type: application/zip" \
+  http://localhost:3000/presigned-url/test-project/v1.0.0/storybook.zip)
+
+# Extract the URL (requires jq)
+PRESIGNED_URL=$(echo $PRESIGNED_RESPONSE | jq -r '.url')
+
+# Upload the file using the presigned URL
+curl -X PUT \
+  -H "Content-Type: application/zip" \
+  --data-binary @test.zip \
+  "$PRESIGNED_URL"
+```
+**Expected Response**: `200 OK` (from R2 directly)
+
+### Testing Cloudflare Worker Local Development
+
+#### 1. Start the Worker development server:
+```bash
+wrangler dev
+```
+
+#### 2. Test health check:
+```bash
+curl http://localhost:8787/
+```
+**Expected Response**: `200 OK` with health information
+
+#### 3. Test direct upload:
+```bash
+curl -X POST \
+  -H "Content-Type: application/zip" \
+  --data-binary @test.zip \
+  http://localhost:8787/upload/test-project/v1.0.0
+```
+**Expected Response**: `201 Created` (same format as Node.js)
+
+#### 4. Test presigned URL generation:
+```bash
+curl -X POST \
+  -H "Content-Type: application/zip" \
+  http://localhost:8787/presigned-url/test-project/v1.0.0/storybook.zip
+```
+**Expected Response**: `200 OK` (same format as Node.js)
+
+#### 5. Test file upload using presigned URL:
+```bash
+# Get presigned URL and upload (same commands as Node.js, but port 8787)
+PRESIGNED_RESPONSE=$(curl -s -X POST \
+  -H "Content-Type: application/zip" \
+  http://localhost:8787/presigned-url/test-project/v1.0.0/storybook.zip)
+
+PRESIGNED_URL=$(echo $PRESIGNED_RESPONSE | jq -r '.url')
+
+curl -X PUT \
+  -H "Content-Type: application/zip" \
+  --data-binary @test.zip \
+  "$PRESIGNED_URL"
+```
+
+### Verifying File Access
+
+After successful uploads, verify that files are accessible via R2 public URLs:
+
+```bash
+# For staging bucket (local development)
+curl https://pub-my-storybooks-staging.{userid}.r2.dev/test-project/v1.0.0/storybook.zip
+
+# For production bucket (after production deployment)
+curl https://pub-my-storybooks-production.{userid}.r2.dev/test-project/v1.0.0/storybook.zip
+```
+
+### Error Handling
+
+Common error responses:
+
+- **400 Bad Request**: Missing required parameters or invalid Content-Type
+- **500 Internal Server Error**: Configuration issues (check credentials)
+- **403 Forbidden**: Invalid credentials or bucket permissions
+
+### Performance Comparison
+
+Both upload methods (direct and presigned URL) should work efficiently:
+
+- **Direct Upload**: File goes through your service to R2
+- **Presigned URL**: File goes directly from client to R2 (bypasses your service for the actual upload)
+
+Use presigned URLs for large files or when you want to reduce server load.
 

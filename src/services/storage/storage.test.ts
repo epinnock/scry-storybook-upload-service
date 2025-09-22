@@ -1,7 +1,6 @@
 // In src/services/storage/storage.test.ts
 
 import { describe, it, expect, vi } from 'vitest';
-import { mock, instance, when, anything, anyString } from 'jest-mock';
 import { S3Client } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -30,7 +29,7 @@ describe('R2S3StorageService (Node.js)', () => {
     (Upload as vi.Mock).mockImplementation(() => mockUpload);
 
     const key = 'test-project/test-version/storybook.zip';
-    const body = new Readable();
+    const body = Buffer.from('test zip content');
     const contentType = 'application/zip';
 
     // Act

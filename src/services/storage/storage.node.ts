@@ -1,9 +1,9 @@
 // In src/services/storage/storage.node.ts
 
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command, DeleteObjectsCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Upload } from '@aws-sdk/lib-storage';
-import { StorageService, UploadResult } from './storage.service';
+import { StorageService, UploadResult } from './storage.service.js';
 import { Readable } from 'stream';
 
 // Define the shape of the configuration object.
@@ -73,5 +73,38 @@ export class R2S3StorageService implements StorageService {
     const signedUrl = await getSignedUrl(this.s3, command, { expiresIn: 3600 }); // URL valid for 1 hour
 
     return { url: signedUrl, key: key };
+  }
+
+  /**
+   * Deletes all objects with keys matching the given prefix.
+   * @param prefix The prefix to match object keys (e.g., 'project/version/').
+   * @returns A promise that resolves when deletion is complete.
+   */
+  async deleteByPrefix(prefix: string): Promise<void> {
+    let continuationToken: string | undefined;
+    do {
+      const listCommand = new ListObjectsV2Command({
+        Bucket: this.bucketName,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      });
+
+      const listResult = await this.s3.send(listCommand);
+
+      if (listResult.Contents && listResult.Contents.length > 0) {
+        const deleteParams = {
+          Bucket: this.bucketName,
+          Delete: {
+            Objects: listResult.Contents.map(obj => ({ Key: obj.Key })),
+            Quiet: true,
+          },
+        };
+
+        const deleteCommand = new DeleteObjectsCommand(deleteParams);
+        await this.s3.send(deleteCommand);
+      }
+
+      continuationToken = listResult.NextContinuationToken;
+    } while (continuationToken);
   }
 }
