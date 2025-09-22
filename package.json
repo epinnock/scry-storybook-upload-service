@@ -13,7 +13,7 @@
     "dev:worker": "wrangler dev",
     "deploy:worker": "wrangler deploy",
     "e2e:setup": "npm install && npm run build",
-    "e2e:node": "concurrently \"npm run dev:node\" \"wait-on http://localhost:3000 && vitest run e2e --env node\"",
+    "e2e:node": "E2E_TARGET=node vitest run e2e",
     "e2e:worker": "concurrently \"npm run dev:worker\" \"wait-on http://localhost:8787 && vitest run e2e --env worker\"",
     "e2e:docker": "docker build -t storybook-service . && docker run -p 3000:3000 -d storybook-service && wait-on http://localhost:3000 && vitest run e2e --env docker && docker stop $(docker ps -q --filter ancestor=storybook-service)",
     "test:e2e:prod": "E2E_TARGET=production vitest run e2e",

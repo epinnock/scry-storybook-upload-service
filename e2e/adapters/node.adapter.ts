@@ -8,19 +8,25 @@ export class NodeAdapter implements TestAdapter {
 
   async setup(config: E2EConfig): Promise<void> {
     // Check if port is already in use and if so, try to use existing service
-    const port = config.port || 3000;
-    const isAlreadyRunning = await this.isHealthy(config);
+    let port = config.port || 3001;
+    let isAlreadyRunning = await this.isHealthy(config);
     
     if (isAlreadyRunning) {
       console.log(`Node server already running on port ${port}, using existing service`);
       return;
     }
 
+    // Try to find an available port if the default is in use
+    port = await this.findAvailablePort(port);
+    
+    // Update config with the actual port we'll use
+    const actualConfig = { ...config, port, baseUrl: `http://localhost:${port}` };
+
     // Kill any existing processes on the port
     await this.killExistingProcess(port);
 
     // Set test environment variables
-    Object.entries(config.envVars || {}).forEach(([key, value]) => {
+    Object.entries(actualConfig.envVars || {}).forEach(([key, value]) => {
       process.env[key] = value;
     });
 
@@ -37,7 +43,7 @@ export class NodeAdapter implements TestAdapter {
     const serverPath = path.join(process.cwd(), 'dist', 'entry.node.js');
     this.serverProcess = spawn('node', [serverPath], {
       stdio: 'pipe',
-      env: { ...process.env, ...config.envVars, PORT: port.toString() },
+      env: { ...process.env, ...actualConfig.envVars, PORT: port.toString() },
     });
 
     this.serverProcess.stdout?.on('data', (data) => console.log(`Node server: ${data}`));
@@ -54,8 +60,39 @@ export class NodeAdapter implements TestAdapter {
       }
     });
 
-    // Wait for server to be ready
-    await waitForServer(config.baseUrl, 30000);
+    // Wait for server to be ready using the actual port
+    await waitForServer(actualConfig.baseUrl, 30000);
+  }
+
+  private async findAvailablePort(startPort: number): Promise<number> {
+    const net = await import('net');
+    
+    const isPortInUse = (port: number): Promise<boolean> => {
+      return new Promise((resolve) => {
+        const server = net.createServer();
+        server.listen(port, () => {
+          server.once('close', () => resolve(false));
+          server.close();
+        });
+        server.on('error', () => resolve(true));
+      });
+    };
+
+    let port = startPort;
+    let attempts = 0;
+    const maxAttempts = 10;
+
+    while (attempts < maxAttempts) {
+      const inUse = await isPortInUse(port);
+      if (!inUse) {
+        console.log(`Found available port: ${port}`);
+        return port;
+      }
+      port++;
+      attempts++;
+    }
+
+    throw new Error(`Could not find available port after ${maxAttempts} attempts starting from ${startPort}`);
   }
 
   private async killExistingProcess(port: number): Promise<void> {

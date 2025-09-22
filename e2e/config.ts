@@ -21,8 +21,8 @@ export interface TestAdapter {
 
 export const defaultConfig: Record<DeploymentTarget, Partial<E2EConfig>> = {
   node: {
-    baseUrl: 'http://localhost:3000',
-    port: 3000,
+    baseUrl: 'http://localhost:3001',
+    port: 3001,
     envVars: {
       NODE_ENV: 'test',
     },
