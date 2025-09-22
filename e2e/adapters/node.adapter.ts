@@ -7,6 +7,18 @@ export class NodeAdapter implements TestAdapter {
   private serverProcess: ChildProcess | null = null;
 
   async setup(config: E2EConfig): Promise<void> {
+    // Check if port is already in use and if so, try to use existing service
+    const port = config.port || 3000;
+    const isAlreadyRunning = await this.isHealthy(config);
+    
+    if (isAlreadyRunning) {
+      console.log(`Node server already running on port ${port}, using existing service`);
+      return;
+    }
+
+    // Kill any existing processes on the port
+    await this.killExistingProcess(port);
+
     // Set test environment variables
     Object.entries(config.envVars || {}).forEach(([key, value]) => {
       process.env[key] = value;
@@ -15,21 +27,47 @@ export class NodeAdapter implements TestAdapter {
     // Build the project if not already built
     const { execSync } = await import('child_process');
     try {
-      execSync('npm run build', { stdio: 'inherit' });
-    } catch {}
+      console.log('Building project...');
+      execSync('pnpm run build', { stdio: 'inherit' });
+    } catch (error) {
+      console.error('Build failed, but continuing anyway:', (error as { message: string }).message);
+    }
 
     // Spawn the Node.js server
     const serverPath = path.join(process.cwd(), 'dist', 'entry.node.js');
     this.serverProcess = spawn('node', [serverPath], {
       stdio: 'pipe',
-      env: { ...process.env, ...config.envVars },
+      env: { ...process.env, ...config.envVars, PORT: port.toString() },
     });
 
     this.serverProcess.stdout?.on('data', (data) => console.log(`Node server: ${data}`));
     this.serverProcess.stderr?.on('data', (data) => console.error(`Node server error: ${data}`));
 
+    // Handle process errors
+    this.serverProcess.on('error', (error) => {
+      console.error(`Node server process error: ${error}`);
+    });
+
+    this.serverProcess.on('exit', (code, signal) => {
+      if (code !== 0 && code !== null) {
+        console.error(`Node server process exited with code ${code}, signal ${signal}`);
+      }
+    });
+
     // Wait for server to be ready
     await waitForServer(config.baseUrl, 30000);
+  }
+
+  private async killExistingProcess(port: number): Promise<void> {
+    try {
+      const { execSync } = await import('child_process');
+      // Kill any process using the port
+      execSync(`lsof -ti:${port} | xargs kill -9 2>/dev/null || true`, { stdio: 'ignore' });
+      // Wait a moment for the port to be released
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    } catch {
+      // Ignore errors - port might not be in use
+    }
   }
 
   async getClient(config: E2EConfig): Promise<ApiClient> {
@@ -41,8 +79,9 @@ export class NodeAdapter implements TestAdapter {
 
   async isHealthy(config: E2EConfig): Promise<boolean> {
     try {
-      const res = await fetch(config.baseUrl);
-      return res.status === 404; // Expect 404 for unknown route, indicating server is up
+      const healthUrl = config.baseUrl.endsWith('/') ? config.baseUrl + 'health' : config.baseUrl + '/health';
+      const res = await fetch(healthUrl);
+      return res.ok && res.status === 200; // Expect 200 for health endpoint
     } catch {
       return false;
     }
@@ -68,8 +107,9 @@ export class NodeAdapter implements TestAdapter {
       await exitPromise;
       this.serverProcess = null;
       
-      // Additional delay to ensure port is fully released
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // Additional cleanup - kill any remaining processes on the port
+      const port = config.port || 3000;
+      await this.killExistingProcess(port);
     }
   }
 }

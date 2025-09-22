@@ -133,17 +133,18 @@ export async function waitForServer(url: string, timeout = 30000): Promise<void>
     const start = Date.now();
     const check = async () => {
       try {
-        const res = await fetch(url);
-        if (res.ok) {
+        const healthUrl = url.endsWith('/') ? url + 'health' : url + '/health';
+        const res = await fetch(healthUrl);
+        if (res.ok && res.status === 200) {
           resolve();
         } else if (Date.now() - start > timeout) {
-          reject(new Error(`Server not ready after ${timeout}ms`));
+          reject(new Error(`Server not ready after ${timeout}ms - last status: ${res.status}`));
         } else {
           setTimeout(check, 1000);
         }
-      } catch {
+      } catch (error) {
         if (Date.now() - start > timeout) {
-          reject(new Error(`Server not ready after ${timeout}ms`));
+          reject(new Error(`Server not ready after ${timeout}ms - error: ${error.message}`));
         } else {
           setTimeout(check, 1000);
         }
