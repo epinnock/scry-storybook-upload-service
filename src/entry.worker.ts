@@ -3,7 +3,7 @@
 import { Hono } from 'hono';
 import { app } from './app';
 import { R2S3StorageService } from './services/storage/storage.worker';
-import { MockStorageService } from './services/storage/storage.test';
+import { MockStorageService } from './services/storage/storage.mock';
 import type { AppEnv } from './app';
 
 /**

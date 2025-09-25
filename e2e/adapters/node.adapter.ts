@@ -80,7 +80,7 @@ export class NodeAdapter implements TestAdapter {
 
     let port = startPort;
     let attempts = 0;
-    const maxAttempts = 10;
+    const maxAttempts = 50; // Increased from 10 to 50
 
     while (attempts < maxAttempts) {
       const inUse = await isPortInUse(port);

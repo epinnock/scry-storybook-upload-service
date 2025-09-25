@@ -109,48 +109,63 @@ const uploadRoute = createRoute({
           schema: ErrorResponseSchema
         }
       }
+    },
+    500: {
+      description: 'Internal server error',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema
+        }
+      }
     }
   }
 });
 
 app.openapi(uploadRoute, async (c) => {
-  const storage = c.var.storage;
-  const { project, version } = c.req.valid('param');
+  try {
+    const storage = c.var.storage;
+    const { project, version } = c.req.valid('param');
 
-  // Validate project and version
-  if (!project || project.trim() === '') {
-    return c.json({ error: 'Project name is required' }, 400);
+    // Validate project and version
+    if (!project || project.trim() === '') {
+      return c.json({ error: 'Project name is required' }, 400);
+    }
+    if (!version || version.trim() === '') {
+      return c.json({ error: 'Version is required' }, 400);
+    }
+
+    const filename = 'storybook.zip'; // Default or from form
+    const key = `${project}/${version}/${filename}`;
+
+    const formData = await c.req.formData();
+    const file = formData.get('file') as File;
+    if (!file || file.size === 0) {
+      return c.json({ error: 'No file provided or empty file' }, 400);
+    }
+
+    // Check file size limit (5MB)
+    const maxSize = 5 * 1024 * 1024; // 5MB
+    if (file.size > maxSize) {
+      return c.json({ error: 'File too large. Maximum size is 5MB' }, 413);
+    }
+
+    const contentType = file.type || 'application/zip';
+    const body = file.stream();
+
+    const result = await storage.upload(key, body, contentType);
+
+    return c.json({
+      success: true,
+      message: 'Upload successful',
+      key: key,
+      data: result
+    }, 201);
+  } catch (error) {
+    console.error('Upload error:', error);
+    return c.json({ 
+      error: `Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}` 
+    }, 500);
   }
-  if (!version || version.trim() === '') {
-    return c.json({ error: 'Version is required' }, 400);
-  }
-
-  const filename = 'storybook.zip'; // Default or from form
-  const key = `${project}/${version}/${filename}`;
-
-  const formData = await c.req.formData();
-  const file = formData.get('file') as File;
-  if (!file || file.size === 0) {
-    return c.json({ error: 'No file provided or empty file' }, 400);
-  }
-
-  // Check file size limit (5MB)
-  const maxSize = 5 * 1024 * 1024; // 5MB
-  if (file.size > maxSize) {
-    return c.json({ error: 'File too large. Maximum size is 5MB' }, 413);
-  }
-
-  const contentType = file.type || 'application/zip';
-  const body = file.stream();
-
-  const result = await storage.upload(key, body, contentType);
-
-  return c.json({
-    success: true,
-    message: 'Upload successful',
-    key: key,
-    data: result
-  }, 201);
 });
 
 // File retrieval route

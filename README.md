@@ -449,7 +449,7 @@ curl http://localhost:3000/
 ```bash
 curl -X POST \
   -H "Content-Type: application/zip" \
-  --data-binary @test.zip \
+  --data-binary @/home/boxuser/scry/scry-storybook-upload-service/test.zip \
   http://localhost:3000/upload/test-project/v1.0.0
 ```
 **Expected Response**: `201 Created`
@@ -466,9 +466,7 @@ curl -X POST \
 
 #### 4. Test presigned URL generation:
 ```bash
-curl -X POST \
-  -H "Content-Type: application/zip" \
-  http://localhost:3000/presigned-url/test-project/v1.0.0/storybook.zip
+ 
 ```
 **Expected Response**: `200 OK`
 ```json

@@ -7,7 +7,9 @@
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
-    "test:e2e": "vitest run e2e",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:e2e:clean": "npm run cleanup:ports && npm run test:e2e",
+    "cleanup:ports": "lsof -ti:3000,3001,3002,3003,3004,3005,3006,3007,3008,3009,3010,8787 | xargs kill -9 2>/dev/null || true",
     "start:node": "node dist/entry.node.js",
     "dev:node": "npm run build && npm run start:node",
     "dev:worker": "wrangler dev",
@@ -51,19 +53,5 @@
     "typescript": "^5.9.2",
     "vitest": "^3.2.4",
     "wait-on": "^8.0.1"
-  },
-  "vitest": {
-    "test": {
-      "environment": "node",
-      "reporters": [
-        "default"
-      ]
-    },
-    "e2e": {
-      "environment": "node",
-      "reporters": [
-        "json"
-      ]
-    }
   }
 }

@@ -4,7 +4,7 @@ import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { app } from './app.js';
 import { R2S3StorageService } from './services/storage/storage.node.js';
-import { MockStorageService } from './services/storage/storage.test.js';
+import { MockStorageService } from './services/storage/storage.mock.js';
 import type { AppEnv } from './app.js';
 
 // This will be used if dotenv is configured for local development

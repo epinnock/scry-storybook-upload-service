@@ -67,35 +67,64 @@ export async function cleanupTestEnv(context: TestContext | undefined): Promise<
     return;
   }
 
-  if (context.config?.cleanupOnFinish) {
-    await context.adapter.cleanup(context.config);
+  // Clean up storage data via API BEFORE terminating the server
+  // This ensures the server is still running when we make cleanup API calls
+  for (const prefix of context.cleanupPrefixes || []) {
+    try {
+      // Parse prefix correctly: "project/version/" -> ["project", "version"]
+      const trimmedPrefix = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
+      const parts = trimmedPrefix.split('/');
+      
+      if (parts.length >= 2) {
+        const project = parts[0];
+        const version = parts[1];
+        
+        const response = await context.client(`/cleanup/${project}/${version}`, {
+          method: 'DELETE',
+          headers: {
+            'X-Test-Cleanup': 'true',
+          },
+        });
+
+        if (response.status !== 200 && response.status !== 404) {
+          console.warn(`Cleanup failed for prefix ${prefix}: HTTP ${response.status}`);
+        }
+      } else {
+        console.warn(`Invalid prefix format: ${prefix}, skipping cleanup`);
+      }
+    } catch (error) {
+      // Only log if it's not a connection error (which might be expected during shutdown)
+      if (error instanceof Error && !error.message.includes('ECONNREFUSED')) {
+        console.warn(`Cleanup error for prefix ${prefix}:`, error.message);
+      }
+    }
   }
 
   // Clean up local temp files
   context.uploadedFiles?.forEach(file => {
-    if (fs.existsSync(file)) {
-      fs.unlinkSync(file);
+    try {
+      if (fs.existsSync(file)) {
+        fs.unlinkSync(file);
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        console.warn(`Failed to delete temp file ${file}:`, error.message);
+      } else {
+        console.warn(`Failed to delete temp file ${file}:`, error);
+      }
     }
   });
 
-  // Clean up storage data via API if prefixes are tracked
-  for (const prefix of context.cleanupPrefixes || []) {
-    const projectVersion = prefix.replace('/', ''); // Extract project/version from prefix
-    const [project, version] = projectVersion.split('/');
-    
+  // Finally, cleanup the adapter (terminate server processes)
+  if (context.config?.cleanupOnFinish) {
     try {
-      const response = await context.client(`/cleanup/${project}/${version}`, {
-        method: 'DELETE',
-        headers: {
-          'X-Test-Cleanup': 'true',
-        },
-      });
-
-      if (response.status !== 200) {
-        console.warn(`Cleanup failed for prefix ${prefix}: ${response.status}`);
-      }
+      await context.adapter.cleanup(context.config);
     } catch (error) {
-      console.warn(`Cleanup error for prefix ${prefix}:`, error);
+      if (error instanceof Error) {
+        console.warn('Adapter cleanup failed:', error.message);
+      } else {
+        console.warn('Adapter cleanup failed:', error);
+      }
     }
   }
 }

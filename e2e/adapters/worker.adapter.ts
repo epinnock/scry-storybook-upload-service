@@ -80,20 +80,40 @@ export class WorkerAdapter implements TestAdapter {
       // Send SIGTERM first for graceful shutdown
       this.devProcess.kill('SIGTERM');
       
-      // Wait for process to exit
+      // Wait for process to exit gracefully
       const exitPromise = new Promise<void>((resolve) => {
-        this.devProcess?.on('exit', () => resolve());
-        // Force kill after 5 seconds if not exited
-        setTimeout(() => {
+        if (!this.devProcess) {
+          resolve();
+          return;
+        }
+
+        const timeout = setTimeout(() => {
+          // Force kill after 10 seconds if not exited (increased from 5s)
           if (this.devProcess && !this.devProcess.killed) {
+            console.log('Worker process did not exit gracefully, forcing termination');
             this.devProcess.kill('SIGKILL');
           }
           resolve();
-        }, 5000);
+        }, 10000);
+
+        this.devProcess.on('exit', (code, signal) => {
+          clearTimeout(timeout);
+          console.log(`Worker process exited with code ${code}, signal ${signal}`);
+          resolve();
+        });
+
+        this.devProcess.on('error', (error) => {
+          clearTimeout(timeout);
+          console.warn(`Worker process error during cleanup: ${error.message}`);
+          resolve();
+        });
       });
       
       await exitPromise;
       this.devProcess = null;
+      
+      // Wait a moment before additional cleanup
+      await new Promise(resolve => setTimeout(resolve, 1000));
       
       // Additional cleanup - kill any remaining processes on the port
       const port = config.port || 8787;
