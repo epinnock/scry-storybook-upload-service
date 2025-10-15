@@ -1,0 +1,98 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "tsc:build",
+      "type": "npm",
+      "script": "build",
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "silent",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      },
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "tsc:watch",
+      "type": "shell",
+      "command": "npx",
+      "args": ["tsc", "--watch"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "typescript",
+        "source": "ts",
+        "applyTo": "closedDocuments",
+        "fileLocation": ["relative", "${workspaceRoot}"],
+        "pattern": "$tsc-watch",
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": {
+            "regexp": ".*\\d:\\d\\d:\\d\\d (AM|PM) - File change detected\\. Starting incremental compilation\\.\\.\\."
+          },
+          "endsPattern": {
+            "regexp": ".*\\d:\\d\\d:\\d\\d (AM|PM) - Compilation complete\\. Watching for file changes\\."
+          }
+        }
+      }
+    },
+    {
+      "label": "dev:node",
+      "type": "npm",
+      "script": "dev:node",
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      },
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "test",
+      "type": "npm",
+      "script": "test",
+      "group": "test",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "test:e2e",
+      "type": "npm",
+      "script": "test:e2e",
+      "group": "test",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      },
+      "problemMatcher": []
+    }
+  ]
+}

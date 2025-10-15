@@ -2,13 +2,27 @@
   "name": "portable-storybook-service",
   "version": "1.0.0",
   "description": "A portable Storybook upload service for Cloudflare Workers and Node.js",
+  "type": "module",
   "main": "dist/entry.node.js",
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:e2e:clean": "npm run cleanup:ports && npm run test:e2e",
+    "cleanup:ports": "lsof -ti:3000,3001,3002,3003,3004,3005,3006,3007,3008,3009,3010,8787 | xargs kill -9 2>/dev/null || true",
     "start:node": "node dist/entry.node.js",
+    "dev:node": "npm run build && npm run start:node",
     "dev:worker": "wrangler dev",
-    "deploy:worker": "wrangler deploy"
+    "deploy:worker": "wrangler deploy",
+    "e2e:setup": "npm install && npm run build",
+    "e2e:node": "E2E_TARGET=node vitest run e2e",
+    "e2e:worker": "concurrently \"npm run dev:worker\" \"wait-on http://localhost:8787 && vitest run e2e --env worker\"",
+    "e2e:docker": "docker build -t storybook-service . && docker run -p 3000:3000 -d storybook-service && wait-on http://localhost:3000 && vitest run e2e --env docker && docker stop $(docker ps -q --filter ancestor=storybook-service)",
+    "test:e2e:prod": "E2E_TARGET=production vitest run e2e",
+    "validate:deployment": "npm run test:e2e:prod -- --reporter json > e2e-report.json",
+    "ci:deploy-and-validate": "npm run deploy:worker && npm run validate:deployment",
+    "test:e2e:report": "vitest run e2e --reporter html,json --output-file ./artifacts/e2e-report.html,./artifacts/e2e-report.json",
+    "artifacts:collect": "mkdir -p artifacts && npm run test:e2e:report"
   },
   "keywords": [
     "hono",
@@ -24,15 +38,23 @@
     "@aws-sdk/lib-storage": "^3.888.0",
     "@aws-sdk/s3-request-presigner": "^3.888.0",
     "@hono/node-server": "^1.19.2",
+    "@hono/swagger-ui": "^0.5.2",
+    "@hono/zod-openapi": "^1.1.2",
+    "@types/busboy": "^1.5.4",
+    "busboy": "^1.6.0",
     "dotenv": "^17.2.2",
+    "firebase-admin": "^13.5.0",
     "hono": "^4.9.7",
     "zod": "^4.1.8"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250913.0",
     "@types/node": "^24.4.0",
+    "concurrently": "^9.1.2",
     "jest-mock": "^30.0.5",
+    "supertest": "^7.0.0",
     "typescript": "^5.9.2",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "wait-on": "^8.0.1"
   }
 }

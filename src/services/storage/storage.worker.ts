@@ -1,8 +1,6 @@
-// In src/services/storage/storage.worker.ts
-
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { StorageService, UploadResult } from './storage.service';
+import { StorageService, UploadResult } from './storage.service.js';
 
 // Define the shape of the configuration object, similar to the Node.js version.
 type R2Config = {
@@ -71,5 +69,23 @@ export class R2S3StorageService implements StorageService {
     const signedUrl = await getSignedUrl(this.s3, command, { expiresIn: 3600 }); // URL valid for 1 hour
 
     return { url: signedUrl, key: key };
+  }
+
+  /**
+   * Deletes all objects with keys matching the given prefix using R2 bindings.
+   * @param prefix The prefix to match object keys (e.g., 'project/version/').
+   * @returns A promise that resolves when deletion is complete.
+   */
+  async deleteByPrefix(prefix: string): Promise<void> {
+    let cursor: string | undefined;
+    do {
+      const list = await this.bucket.list({ prefix, cursor });
+      
+      if (list.objects.length > 0) {
+        await this.bucket.delete(list.objects.map(obj => obj.key));
+      }
+
+      cursor = list.truncated ? list.cursor : undefined;
+    } while (cursor);
   }
 }

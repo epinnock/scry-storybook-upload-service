@@ -6,18 +6,21 @@
 FROM node:20-alpine AS base
 WORKDIR /usr/src/app
 
+# Install pnpm globally
+RUN npm install -g pnpm
+
 # ---- Dependencies Stage ----
 # This stage is dedicated to installing ONLY production dependencies.
 # This creates a clean node_modules directory that can be copied to the final image.
 FROM base AS deps
 COPY package.json pnpm-lock.yaml* ./
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --prod --frozen-lockfile
+RUN pnpm install --prod --frozen-lockfile
 
 # ---- Builder Stage ----
 # This stage installs all dependencies (including devDependencies) and builds the TypeScript application.
 FROM base AS builder
 COPY package.json pnpm-lock.yaml* ./
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile
 # Copy the rest of the source code.
 COPY . .
 # Run the build script defined in package.json (e.g., "tsc").
