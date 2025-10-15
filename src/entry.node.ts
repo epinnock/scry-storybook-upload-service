@@ -5,10 +5,34 @@ import { Hono } from 'hono';
 import { app } from './app.js';
 import { R2S3StorageService } from './services/storage/storage.node.js';
 import { MockStorageService } from './services/storage/storage.mock.js';
+import { FirestoreServiceNode } from './services/firestore/firestore.node.js';
 import type { AppEnv } from './app.js';
+import admin from 'firebase-admin';
 
 // This will be used if dotenv is configured for local development
 import 'dotenv/config';
+
+// Initialize Firebase Admin SDK
+if (!admin.apps.length) {
+  // Check if we should use service account file or environment variables
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    // Use service account file (development mode)
+    admin.initializeApp({
+      credential: admin.credential.applicationDefault()
+    });
+  } else if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
+    // Use environment variables (production mode)
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+      })
+    });
+  } else {
+    console.warn('WARNING: Firebase credentials not configured. Firestore functionality will be disabled.');
+  }
+}
 
 // Define a type for the R2 configuration expected from environment variables.
 type R2Config = {
@@ -54,10 +78,18 @@ const nodeApp = new Hono<AppEnv>();
  * with configuration from environment variables and injects it into the context.
  */
 nodeApp.use('*', async (c, next) => {
-  const storageService = isTestMode 
+  const storageService = isTestMode
     ? new MockStorageService()
     : new R2S3StorageService(config.r2);
   c.set('storage', storageService);
+  
+  // Initialize Firestore service if Firebase is configured
+  if (admin.apps.length > 0) {
+    const serviceAccountId = process.env.FIRESTORE_SERVICE_ACCOUNT_ID || 'upload-service';
+    const firestoreService = new FirestoreServiceNode(serviceAccountId);
+    c.set('firestore', firestoreService);
+  }
+  
   await next();
 });
 

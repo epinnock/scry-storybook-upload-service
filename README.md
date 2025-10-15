@@ -2,11 +2,17 @@
 
 This project provides a backend service for uploading and managing Storybook builds. It's designed to be highly portable and can be deployed as a standard Node.js application or as a serverless Cloudflare Worker.
 
-The service exposes two primary endpoints:
-- **Direct Upload**: Allows for uploading a zipped Storybook build directly to the service.
-- **Presigned URL Generation**: Provides a secure, short-lived URL that a client can use to upload a Storybook build directly to a cloud storage provider.
+## Features
 
-This portability is achieved by abstracting the storage logic into a `StorageService` interface, with separate implementations for the Node.js and Cloudflare Worker environments.
+- **Direct Upload**: Upload zipped Storybook builds directly to the service
+- **Presigned URL Generation**: Generate secure, short-lived URLs for client-side uploads
+- **Build Tracking**: Automatically track builds in Firestore with version history
+- **Auto-incrementing Build Numbers**: Each project gets sequential build numbers
+- **Multi-environment Support**: Run on Node.js, Docker, or Cloudflare Workers
+
+This portability is achieved by abstracting both storage and database logic into service interfaces:
+- `StorageService` - File storage abstraction (R2/S3)
+- `FirestoreService` - Build tracking abstraction (Firestore)
 
 ## Project Structure
 
@@ -37,6 +43,63 @@ The core of this project's portability lies in its storage service abstraction.
 
 The application's entry points (`entry.node.ts` and `entry.worker.ts`) are responsible for instantiating the correct storage service implementation and "injecting" it into the Hono application context. This means the shared API logic in `app.ts` can use the storage service without needing to know which environment it's running in.
 
+## Architecture: Firestore Build Tracking
+
+The service includes optional Firestore integration for tracking build metadata and version history.
+
+### Service Abstraction
+
+- **`src/services/firestore/firestore.service.ts`**: Defines the `FirestoreService` interface for build tracking operations
+- **`src/services/firestore/firestore.node.ts`**: Node.js implementation using Firebase Admin SDK
+- **`src/services/firestore/firestore.worker.ts`**: Cloudflare Worker implementation using Firestore REST API
+- **`src/services/firestore/firestore.types.ts`**: Shared type definitions for build records
+
+### Data Model
+
+Builds are stored in a hierarchical Firestore structure:
+
+```
+projects/{projectId}/
+  ├── builds/{buildId}          # Build records
+  │   ├── id: string
+  │   ├── projectId: string
+  │   ├── versionId: string
+  │   ├── buildNumber: number   # Auto-incrementing
+  │   ├── zipUrl: string
+  │   ├── status: 'active' | 'archived'
+  │   ├── createdAt: Date
+  │   └── createdBy: string
+  └── counters/builds           # Build number counter
+      └── currentBuildNumber: number
+```
+
+### Setup
+
+For detailed Firestore setup instructions, see:
+- **[SERVICE_ACCOUNT_SETUP.md](implementation/SERVICE_ACCOUNT_SETUP.md)** - Complete guide for configuring Firebase service account
+- **[FIRESTORE_INTEGRATION_PLAN.md](implementation/FIRESTORE_INTEGRATION_PLAN.md)** - Architecture and implementation details
+- **[IMPLEMENTATION_SUMMARY.md](implementation/IMPLEMENTATION_SUMMARY.md)** - Complete implementation summary
+
+#### Quick Start
+
+1. Place your `serviceAccount.json` file in the project root
+2. Add to `.env` (Node.js):
+   ```bash
+   GOOGLE_APPLICATION_CREDENTIALS=./serviceAccount.json
+   FIRESTORE_SERVICE_ACCOUNT_ID=upload-service
+   ```
+3. Add to `.dev.vars` (Workers) - extract from serviceAccount.json:
+   ```bash
+   FIREBASE_PROJECT_ID=your-project-id
+   FIREBASE_CLIENT_EMAIL=service-account@project.iam.gserviceaccount.com
+   FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANB...your-key-content...\n-----END PRIVATE KEY-----\n"
+   FIRESTORE_SERVICE_ACCOUNT_ID=upload-service
+   ```
+   
+   **Important**: The `FIREBASE_PRIVATE_KEY` must include the literal `\n` characters (not actual newlines). Copy the entire private_key value from your serviceAccount.json file, including the quotes.
+
+The Firestore integration is **optional** - the service will work without it, but uploads won't be tracked in the database.
+
 ## Development Guide
 
 This guide will walk you through setting up and running the service in both the Node.js and Cloudflare Worker environments.
@@ -65,10 +128,28 @@ The service requires credentials to connect to your S3-compatible storage. This 
 
 **Step 1: Create an R2 Bucket**
 
-If you don't have one already, create an R2 bucket in the Cloudflare dashboard.
+If you don't have one already, create an R2 bucket in the Cloudflare dashboard:
+1. Go to [Cloudflare Dashboard](https://dash.cloudflare.com/) → **R2**
+2. Click **Create bucket**
+3. Enter a bucket name (e.g., `my-storybooks-staging` or `my-storybooks-production`)
+4. Click **Create bucket**
+
 - [Cloudflare R2 Documentation](https://developers.cloudflare.com/r2/)
 
-**Step 2: Get Your R2 Credentials**
+**Step 2: Enable Public Access (Required for Downloads)**
+
+To allow downloading uploaded files via public URLs, you must enable public access:
+
+1. In the Cloudflare Dashboard, go to **R2** → Select your bucket
+2. Go to **Settings** tab → **Public access** section
+3. Click **Allow Access** to enable the public domain
+4. Confirm the action
+
+Your bucket will now be accessible at: `https://pub-{bucket-name}.{account-id}.r2.dev`
+
+⚠️ **Important**: Without public access enabled, file downloads will fail with an "Authorization" error. The service assumes public buckets for serving uploaded Storybook builds.
+
+**Step 3: Get Your R2 Credentials**
 
 You will need the following information from your Cloudflare account:
 - **Account ID**: You can find this in the main dashboard overview.
@@ -450,7 +531,7 @@ curl http://localhost:3000/
 curl -X POST \
   -H "Content-Type: application/zip" \
   --data-binary @/home/boxuser/scry/scry-storybook-upload-service/test.zip \
-  http://localhost:3000/upload/test-project/v1.0.0
+  https://storybook-deployment-service.epinnock.workers.dev/upload/test-project/v1.0.0
 ```
 **Expected Response**: `201 Created`
 ```json
@@ -466,15 +547,21 @@ curl -X POST \
 
 #### 4. Test presigned URL generation:
 ```bash
- 
+curl -X POST \
+  -H "Content-Type: application/zip" \
+  http://localhost:3000/presigned-url/test-project/v1.0.0/storybook.zip
 ```
 **Expected Response**: `200 OK`
 ```json
 {
   "url": "https://{userid}.r2.cloudflarestorage.com/my-storybooks-staging/test-project/v1.0.0/storybook.zip?...",
-  "key": "test-project/v1.0.0/storybook.zip"
+  "key": "test-project/v1.0.0/storybook.zip",
+  "buildId": "abc123def456",
+  "buildNumber": 1
 }
 ```
+
+**Note**: If Firestore is configured, the response includes [`buildId`](README.md:109) and [`buildNumber`](README.md:110) for tracking. The build record is created in Firestore when the presigned URL is generated, and you can verify it in the Firebase Console under `projects/{project}/builds/{buildId}`.
 
 #### 5. Test file upload using presigned URL:
 ```bash
@@ -494,6 +581,42 @@ curl -X PUT \
 ```
 **Expected Response**: `200 OK` (from R2 directly)
 
+#### 6. Fetch/Download the Uploaded File
+
+After a successful upload, you can fetch the file using the public URL returned in the response:
+
+```bash
+# Using the URL from the upload response
+curl -o downloaded-storybook.zip \
+  "https://pub-my-storybooks-staging.{userid}.r2.dev/test-project/v1.0.0/storybook.zip"
+
+# Or construct the URL using the pattern:
+# https://pub-{bucket-name}.{account-id}.r2.dev/{project}/{version}/storybook.zip
+curl -o downloaded-storybook.zip \
+  "https://pub-my-storybooks-staging.{userid}.r2.dev/test-project/v1.0.0/storybook.zip"
+```
+
+**About the Public URL**:
+- The `pub-` prefix is automatically added by Cloudflare R2 when public access is enabled on a bucket
+- The URL pattern is constructed as: `https://pub-{bucketName}.{accountId}.r2.dev/{path}`
+- This is configured in [`storage.node.ts:37`](src/services/storage/storage.node.ts:37) and [`storage.worker.ts:40`](src/services/storage/storage.worker.ts:40)
+
+⚠️ **Troubleshooting**: If you get an "Authorization" or "InvalidArgument" error, your bucket doesn't have public access enabled. See the [Environment Configuration](#2-environment-configuration) section for setup instructions.
+
+**Verify the downloaded file**:
+```bash
+# Check file size
+ls -lh downloaded-storybook.zip
+
+# Verify it's a valid zip
+unzip -t downloaded-storybook.zip
+
+# Compare with original
+diff test.zip downloaded-storybook.zip
+```
+
+**Note**: The public URL is accessible to anyone with the link. The R2 bucket must have public access enabled for the URL to work.
+
 ### Testing Cloudflare Worker Local Development
 
 #### 1. Start the Worker development server:
@@ -503,7 +626,7 @@ wrangler dev
 
 #### 2. Test health check:
 ```bash
-curl http://localhost:8787/
+curl http://localhost:8787/health
 ```
 **Expected Response**: `200 OK` with health information
 
@@ -512,7 +635,7 @@ curl http://localhost:8787/
 curl -X POST \
   -H "Content-Type: application/zip" \
   --data-binary @test.zip \
-  http://localhost:8787/upload/test-project/v1.0.0
+  http://localhost:3000/upload/test-project/v1.0.0
 ```
 **Expected Response**: `201 Created` (same format as Node.js)
 
@@ -522,7 +645,17 @@ curl -X POST \
   -H "Content-Type: application/zip" \
   http://localhost:8787/presigned-url/test-project/v1.0.0/storybook.zip
 ```
-**Expected Response**: `200 OK` (same format as Node.js)
+**Expected Response**: `200 OK`
+```json
+{
+  "url": "https://{userid}.r2.cloudflarestorage.com/my-storybooks-staging/test-project/v1.0.0/storybook.zip?...",
+  "key": "test-project/v1.0.0/storybook.zip",
+  "buildId": "abc123def456",
+  "buildNumber": 1
+}
+```
+
+**Note**: With Firestore configured, the build record is automatically created and tracked with an auto-incrementing build number.
 
 #### 5. Test file upload using presigned URL:
 ```bash
@@ -537,6 +670,19 @@ curl -X PUT \
   -H "Content-Type: application/zip" \
   --data-binary @test.zip \
   "$PRESIGNED_URL"
+```
+
+#### 6. Fetch/Download the Uploaded File
+
+After uploading, fetch the file using the public R2 URL:
+
+```bash
+# Download from staging bucket
+curl -o downloaded-storybook.zip \
+  "https://pub-my-storybooks-staging.{userid}.r2.dev/test-project/v1.0.0/storybook.zip"
+
+# Verify download
+unzip -t downloaded-storybook.zip
 ```
 
 ### Verifying File Access
@@ -559,6 +705,24 @@ Common error responses:
 - **500 Internal Server Error**: Configuration issues (check credentials)
 - **403 Forbidden**: Invalid credentials or bucket permissions
 
+**R2 Public Access Errors**:
+If downloads fail with errors like:
+```xml
+<Error>
+<Code>InvalidArgument</Code>
+<Message>Authorization</Message>
+</Error>
+```
+
+This means your R2 bucket doesn't have public access enabled. To fix:
+1. Go to Cloudflare Dashboard → **R2** → Select your bucket
+2. Go to **Settings** → **Public access**
+3. Click **Allow Access**
+4. Wait a few moments for the change to propagate
+5. Retry your download
+
+The service requires public buckets to serve uploaded Storybook builds via the `https://pub-{bucket}.{account}.r2.dev` domain.
+
 ### Performance Comparison
 
 Both upload methods (direct and presigned URL) should work efficiently:
@@ -568,3 +732,71 @@ Both upload methods (direct and presigned URL) should work efficiently:
 
 Use presigned URLs for large files or when you want to reduce server load.
 
+### Testing Production Deployment with Firebase Build Tracking
+
+Once deployed to production, you can test the presigned URL generation and verify Firebase build tracking:
+
+```bash
+# Generate presigned URL (creates build record in Firestore)
+PRESIGNED_RESPONSE=$(curl -s -X POST \
+  -H "Content-Type: application/zip" \
+  https://storybook-deployment-service.epinnock.workers.dev/presigned-url/myproject/0.0.1/storybook.zip)
+
+# View the response with build tracking info
+echo $PRESIGNED_RESPONSE | jq '.'
+```
+
+**Expected Response**:
+```json
+{
+  "url": "https://...r2.cloudflarestorage.com/.../storybook.zip?X-Amz-Signature=...",
+  "key": "myproject/0.0.1/storybook.zip",
+  "buildId": "xyz789abc123",
+  "buildNumber": 5
+}
+```
+
+**Upload the file using the presigned URL**:
+```bash
+# Extract the presigned URL
+PRESIGNED_URL=$(echo $PRESIGNED_RESPONSE | jq -r '.url')
+
+# Upload your file directly to R2
+curl -X PUT \
+  -H "Content-Type: application/zip" \
+  --data-binary @test.zip \
+  "$PRESIGNED_URL"
+```
+
+**Verify the build in Firebase Console**:
+1. Go to your Firebase project at `https://console.firebase.google.com`
+2. Navigate to **Firestore Database**
+3. Find the build record at: `projects/myproject/builds/{buildId}`
+4. Check the build metadata:
+   - [`buildNumber`](README.md:110): Auto-incremented sequence number
+   - [`projectId`](README.md:109): "myproject"
+   - [`versionId`](README.md:109): "0.0.1"
+   - [`zipUrl`](README.md:109): The R2 public URL
+   - [`createdAt`](README.md:109): Timestamp of generation
+   - [`status`](README.md:109): "active"
+
+The build counter is stored at `projects/myproject/counters/builds` and increments atomically for each new build.
+
+**Download the uploaded file from production**:
+```bash
+# Fetch the file using the zipUrl from the response or construct the URL
+curl -o production-storybook.zip \
+  "https://pub-my-storybooks-production.{userid}.r2.dev/myproject/0.0.1/storybook.zip"
+
+# Verify the download
+unzip -t production-storybook.zip
+ls -lh production-storybook.zip
+```
+
+**Access via Browser**:
+You can also access the uploaded Storybook directly in a browser by visiting:
+```
+https://pub-my-storybooks-production.{userid}.r2.dev/myproject/0.0.1/storybook.zip
+```
+
+The `zipUrl` field in the build record stored in Firestore contains this exact public URL for easy reference.

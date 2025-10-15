@@ -7,7 +7,16 @@ name = "storybook-deployment-service"
 main = "src/entry.worker.ts"
 
 # Specifies the version of the Workers runtime APIs to use.
-compatibility_date = "2024-03-01"
+# Updated to 2024-09-23 for automatic Node.js built-in module resolution
+compatibility_date = "2024-09-23"
+
+# Enable Node.js compatibility for packages like 'stream'
+compatibility_flags = ["nodejs_compat"]
+
+# Development server configuration
+[dev]
+ip = "0.0.0.0"  # Bind to all network interfaces instead of just localhost
+port = 8787
 
 # Defines the bindings to other Cloudflare resources.
 [[r2_buckets]]
@@ -44,3 +53,11 @@ vars = { R2_BUCKET_NAME = "my-storybooks-staging" }
 binding = "STORYBOOK_BUCKET"
 bucket_name = "my-storybooks-staging"
 preview_bucket_name = "my-storybooks-staging"
+
+# Observability and Logging Configuration
+[observability]
+[observability.logs]
+enabled = true  # Enable logging
+head_sampling_rate = 1  # Sample 100% of requests
+invocation_logs = true  # Log function invocations
+persist = true  # Persist logs for analysis

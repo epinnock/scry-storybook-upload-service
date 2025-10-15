@@ -16,6 +16,9 @@
 .r2.secrets
 *.secrets
 .credentials
+serviceAccount.json
+serviceAccount*.json
+**/serviceAccount.json
 
 # Wrangler local development directory
 .wrangler/

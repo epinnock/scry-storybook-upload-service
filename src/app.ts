@@ -5,17 +5,88 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { createRoute } from '@hono/zod-openapi';
 import { z } from 'zod';
 import { swaggerUI } from '@hono/swagger-ui';
+import { logger } from 'hono/logger';
+import busboy from 'busboy';
+import { Readable } from 'stream';
 import type { StorageService } from './services/storage/storage.service.js';
+import type { FirestoreService } from './services/firestore/firestore.service.js';
 
 // Define the application's environment, including injectable variables.
 export type AppEnv = {
   Bindings: {}; // Bindings will be defined per-target
   Variables: {
     storage: StorageService;
+    firestore?: FirestoreService; // Optional to support gradual rollout
   };
 };
 
 const app = new OpenAPIHono<AppEnv>();
+
+// Add request logging middleware
+app.use('*', logger());
+
+// Utility function to parse multipart form data using busboy
+async function parseMultipartFormData(request: Request): Promise<{ file?: File; fields: Record<string, string> }> {
+  return new Promise((resolve, reject) => {
+    const contentType = request.headers.get('content-type');
+    if (!contentType || !contentType.includes('multipart/form-data')) {
+      reject(new Error('Content-Type must be multipart/form-data'));
+      return;
+    }
+
+    let file: File | undefined;
+    const fields: Record<string, string> = {};
+    const chunks: Buffer[] = [];
+
+    const bb = busboy({ headers: { 'content-type': contentType } });
+
+    bb.on('file', (name, stream, info) => {
+      const { filename, mimeType } = info;
+      
+      stream.on('data', (chunk) => {
+        chunks.push(chunk);
+      });
+
+      stream.on('end', () => {
+        if (chunks.length > 0) {
+          const buffer = Buffer.concat(chunks);
+          file = new File([buffer], filename || 'upload', { type: mimeType || 'application/octet-stream' });
+        }
+      });
+    });
+
+    bb.on('field', (name, value) => {
+      fields[name] = value;
+    });
+
+    bb.on('finish', () => {
+      resolve({ file, fields });
+    });
+
+    bb.on('error', (err) => {
+      reject(err);
+    });
+
+    // Convert the request body to a readable stream
+    if (request.body) {
+      const reader = request.body.getReader();
+      const stream = new Readable({
+        read() {
+          reader.read().then(({ done, value }) => {
+            if (done) {
+              this.push(null);
+            } else {
+              this.push(Buffer.from(value));
+            }
+          }).catch(err => this.destroy(err));
+        }
+      });
+      stream.pipe(bb);
+    } else {
+      reject(new Error('No request body'));
+    }
+  });
+}
 
 // Define Zod schemas for parameters and responses
 const ProjectVersionParamsSchema = z.object({
@@ -36,7 +107,9 @@ const UploadResponseSchema = z.object({
   data: z.object({
     url: z.string(),
     path: z.string(),
-    versionId: z.string().optional()
+    versionId: z.string().optional(),
+    buildId: z.string().optional(),
+    buildNumber: z.number().optional()
   })
 });
 
@@ -44,7 +117,9 @@ const PresignedUrlResponseSchema = z.object({
   url: z.string(),
   fields: z.object({
     key: z.string()
-  })
+  }),
+  buildId: z.string().optional(),
+  buildNumber: z.number().optional()
 });
 
 const CleanupResponseSchema = z.object({
@@ -124,6 +199,7 @@ const uploadRoute = createRoute({
 app.openapi(uploadRoute, async (c) => {
   try {
     const storage = c.var.storage;
+    const firestore = c.var.firestore;
     const { project, version } = c.req.valid('param');
 
     // Validate project and version
@@ -137,10 +213,55 @@ app.openapi(uploadRoute, async (c) => {
     const filename = 'storybook.zip'; // Default or from form
     const key = `${project}/${version}/${filename}`;
 
-    const formData = await c.req.formData();
-    const file = formData.get('file') as File;
-    if (!file || file.size === 0) {
-      return c.json({ error: 'No file provided or empty file' }, 400);
+    // Handle both multipart form data and raw binary uploads
+    let file: File;
+    const contentType = c.req.header('content-type') || '';
+    
+    if (contentType.includes('multipart/form-data')) {
+      // Handle multipart form data
+      try {
+        // First try Hono's built-in formData method
+        const formData = await c.req.formData();
+        file = formData.get('file') as File;
+        
+        if (!file || file.size === 0) {
+          throw new Error('No file in FormData');
+        }
+      } catch (formDataError) {
+        console.log('Hono FormData parsing failed, trying busboy fallback:', formDataError instanceof Error ? formDataError.message : String(formDataError));
+        
+        // Fallback to busboy parser for Node.js compatibility
+        try {
+          const parsed = await parseMultipartFormData(c.req.raw);
+          file = parsed.file!;
+          
+          if (!file || file.size === 0) {
+            return c.json({ error: 'No file provided or empty file' }, 400);
+          }
+        } catch (busboyError) {
+          console.error('Busboy parsing failed:', busboyError);
+          return c.json({
+            error: 'Failed to parse file upload. Please ensure you are sending a valid multipart/form-data request with a file field named "file".'
+          }, 400);
+        }
+      }
+    } else {
+      // Handle raw binary upload (e.g., application/zip, application/octet-stream)
+      try {
+        const body = await c.req.arrayBuffer();
+        if (!body || body.byteLength === 0) {
+          return c.json({ error: 'No file data received' }, 400);
+        }
+        
+        // Determine the MIME type from the Content-Type header or default to application/zip
+        const mimeType = contentType || 'application/zip';
+        file = new File([body], filename, { type: mimeType });
+        
+        console.log(`Received raw binary upload: ${body.byteLength} bytes, type: ${mimeType}`);
+      } catch (bodyError) {
+        console.error('Raw body parsing failed:', bodyError);
+        return c.json({ error: 'Failed to parse raw file upload' }, 400);
+      }
     }
 
     // Check file size limit (5MB)
@@ -149,21 +270,43 @@ app.openapi(uploadRoute, async (c) => {
       return c.json({ error: 'File too large. Maximum size is 5MB' }, 413);
     }
 
-    const contentType = file.type || 'application/zip';
+    const fileContentType = file.type || 'application/zip';
     const body = file.stream();
 
-    const result = await storage.upload(key, body, contentType);
+    const result = await storage.upload(key, body, fileContentType);
+
+    // Create Firestore build record if Firestore is configured
+    let buildId: string | undefined;
+    let buildNumber: number | undefined;
+    
+    if (firestore) {
+      try {
+        const build = await firestore.createBuild(project, {
+          versionId: version,
+          zipUrl: result.url
+        });
+        buildId = build.id;
+        buildNumber = build.buildNumber;
+      } catch (firestoreError) {
+        // Log error but don't fail the upload
+        console.error('Firestore error (upload succeeded):', firestoreError);
+      }
+    }
 
     return c.json({
       success: true,
       message: 'Upload successful',
       key: key,
-      data: result
+      data: {
+        ...result,
+        ...(buildId && { buildId }),
+        ...(buildNumber !== undefined && { buildNumber })
+      }
     }, 201);
   } catch (error) {
     console.error('Upload error:', error);
-    return c.json({ 
-      error: `Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}` 
+    return c.json({
+      error: `Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`
     }, 500);
   }
 });
@@ -232,7 +375,7 @@ const presignedUrlRoute = createRoute({
   },
   responses: {
     200: {
-      description: 'Presigned URL data',
+      description: 'Presigned URL data with build tracking',
       content: {
         'application/json': {
           schema: PresignedUrlResponseSchema
@@ -244,6 +387,7 @@ const presignedUrlRoute = createRoute({
 
 app.openapi(presignedUrlRoute, async (c) => {
   const storage = c.var.storage;
+  const firestore = c.var.firestore;
   const { project, version, filename } = c.req.valid('param');
   
   let contentType = 'application/octet-stream';
@@ -259,12 +403,37 @@ app.openapi(presignedUrlRoute, async (c) => {
 
   const data = await storage.getPresignedUploadUrl(key, contentType);
 
-  // Format response to match test expectations
+  // Create Firestore build record if Firestore is configured
+  let buildId: string | undefined;
+  let buildNumber: number | undefined;
+  
+  if (firestore) {
+    try {
+      // Construct the URL that will be available after upload
+      const zipUrl = data.url.split('?')[0]; // Remove query parameters to get the base URL
+      
+      const build = await firestore.createBuild(project, {
+        versionId: version,
+        zipUrl: zipUrl
+      });
+      buildId = build.id;
+      buildNumber = build.buildNumber;
+      
+      console.log(`[INFO] Build record created for presigned upload: ID=${buildId}, Number=${buildNumber}`);
+    } catch (firestoreError) {
+      // Log error but don't fail the presigned URL generation
+      console.error('Firestore error (presigned URL succeeded):', firestoreError);
+    }
+  }
+
+  // Format response to match test expectations and include build data
   return c.json({
     url: data.url,
     fields: {
       key: data.key
-    }
+    },
+    ...(buildId && { buildId }),
+    ...(buildNumber !== undefined && { buildNumber })
   });
 });
 

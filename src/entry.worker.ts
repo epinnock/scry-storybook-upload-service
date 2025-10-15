@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { app } from './app';
 import { R2S3StorageService } from './services/storage/storage.worker';
 import { MockStorageService } from './services/storage/storage.mock';
+import { FirestoreServiceWorker } from './services/firestore/firestore.worker';
 import type { AppEnv } from './app';
 
 /**
@@ -20,6 +21,12 @@ type Bindings = {
   R2_S3_ACCESS_KEY_ID: string;
   R2_S3_SECRET_ACCESS_KEY: string;
   R2_BUCKET_NAME: string;
+  
+  // Firebase/Firestore configuration
+  FIREBASE_PROJECT_ID?: string;
+  FIREBASE_CLIENT_EMAIL?: string;
+  FIREBASE_PRIVATE_KEY?: string;
+  FIRESTORE_SERVICE_ACCOUNT_ID?: string;
   
   // Environment variable to detect test mode
   NODE_ENV?: string;
@@ -57,6 +64,18 @@ workerApp.use('*', async (c, next) => {
 
   // Place the service instance into the context for downstream handlers.
   c.set('storage', storageService);
+  
+  // Initialize Firestore service if Firebase credentials are configured
+  if (c.env.FIREBASE_PROJECT_ID && c.env.FIREBASE_CLIENT_EMAIL && c.env.FIREBASE_PRIVATE_KEY) {
+    const firestoreConfig = {
+      projectId: c.env.FIREBASE_PROJECT_ID,
+      clientEmail: c.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: c.env.FIREBASE_PRIVATE_KEY,
+      serviceAccountId: c.env.FIRESTORE_SERVICE_ACCOUNT_ID || 'upload-service'
+    };
+    const firestoreService = new FirestoreServiceWorker(firestoreConfig);
+    c.set('firestore', firestoreService);
+  }
 
   await next();
 });
