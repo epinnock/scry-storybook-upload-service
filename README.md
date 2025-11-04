@@ -530,8 +530,8 @@ curl http://localhost:3000/
 ```bash
 curl -X POST \
   -H "Content-Type: application/zip" \
-  --data-binary @/home/boxuser/scry/scry-storybook-upload-service/test.zip \
-  https://storybook-deployment-service.epinnock.workers.dev/upload/test-project/v1.0.0
+  --data-binary @/home/boxuser/scry/scry-storybook-upload-service/storybook-fixed.zip \
+  https://storybook-deployment-service.epinnock.workers.dev/upload/test-project/v1.0.62
 ```
 **Expected Response**: `201 Created`
 ```json
@@ -568,7 +568,7 @@ curl -X POST \
 # First, get the presigned URL (save the response)
 PRESIGNED_RESPONSE=$(curl -s -X POST \
   -H "Content-Type: application/zip" \
-  http://localhost:3000/presigned-url/test-project/v1.0.0/storybook.zip)
+https://storybook-deployment-service.epinnock.workers.dev/presigned-url/test-project/v1.0.e/storybook.zip)
 
 # Extract the URL (requires jq)
 PRESIGNED_URL=$(echo $PRESIGNED_RESPONSE | jq -r '.url')
@@ -576,7 +576,7 @@ PRESIGNED_URL=$(echo $PRESIGNED_RESPONSE | jq -r '.url')
 # Upload the file using the presigned URL
 curl -X PUT \
   -H "Content-Type: application/zip" \
-  --data-binary @test.zip \
+  --data-binary @storybook-fixed.zip \
   "$PRESIGNED_URL"
 ```
 **Expected Response**: `200 OK` (from R2 directly)
