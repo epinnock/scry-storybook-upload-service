@@ -6,6 +6,7 @@ This project provides a backend service for uploading and managing Storybook bui
 
 - **Direct Upload**: Upload zipped Storybook builds directly to the service
 - **Presigned URL Generation**: Generate secure, short-lived URLs for client-side uploads
+- **API Key Authentication**: Secure project-scoped API key authentication via Firebase
 - **Build Tracking**: Automatically track builds in Firestore with version history
 - **Auto-incrementing Build Numbers**: Each project gets sequential build numbers
 - **Multi-environment Support**: Run on Node.js, Docker, or Cloudflare Workers
@@ -18,17 +19,22 @@ This portability is achieved by abstracting both storage and database logic into
 
 ```
 .
-├── Dockerfile        # For containerizing the Node.js app
-├── README.md         # This file
-├── package.json      # Project dependencies and scripts
+├── Dockerfile          # For containerizing the Node.js app
+├── README.md           # This file
+├── package.json        # Project dependencies and scripts
 ├── src/
-│   ├── app.ts        # Shared Hono application logic and routes
-│   ├── entry.node.ts # Entry point for the Node.js server
-│   ├── entry.worker.ts# Entry point for the Cloudflare Worker
+│   ├── app.ts          # Shared Hono application logic and routes
+│   ├── entry.node.ts   # Entry point for the Node.js server
+│   ├── entry.worker.ts # Entry point for the Cloudflare Worker
+│   ├── middleware/
+│   │   └── auth.ts     # API key authentication middleware
 │   └── services/
-│       └── storage/  # Storage service abstraction and implementations
-├── tsconfig.json     # TypeScript configuration
-└── wrangler.toml     # Configuration for the Cloudflare Worker
+│       ├── apikey/     # API key service abstraction and implementations
+│       ├── firestore/  # Firestore service for build tracking
+│       └── storage/    # Storage service abstraction and implementations
+├── docs/               # Additional documentation
+├── tsconfig.json       # TypeScript configuration
+└── wrangler.toml       # Configuration for the Cloudflare Worker
 ```
 
 ## Architecture: The Portable Storage Service
@@ -53,6 +59,56 @@ The service includes optional Firestore integration for tracking build metadata 
 - **`src/services/firestore/firestore.node.ts`**: Node.js implementation using Firebase Admin SDK
 - **`src/services/firestore/firestore.worker.ts`**: Cloudflare Worker implementation using Firestore REST API
 - **`src/services/firestore/firestore.types.ts`**: Shared type definitions for build records
+
+## Architecture: API Key Authentication
+
+The service includes a custom Firebase-based API key authentication system for securing upload endpoints.
+
+### Service Abstraction
+
+- **`src/services/apikey/apikey.service.ts`**: Defines the `ApiKeyService` interface for API key operations
+- **`src/services/apikey/apikey.node.ts`**: Node.js implementation using Firebase Admin SDK
+- **`src/services/apikey/apikey.worker.ts`**: Cloudflare Worker implementation using Firestore REST API
+- **`src/services/apikey/apikey.types.ts`**: Type definitions for API key records
+- **`src/services/apikey/apikey.utils.ts`**: Utilities for key generation and hashing
+- **`src/middleware/auth.ts`**: Hono middleware for API key validation
+
+### Key Format
+
+API keys follow the format: `scry_proj_{projectId}_{randomString}`
+
+Example: `scry_proj_my-project_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6`
+
+### Security Features
+
+- **Raw keys never stored**: Only SHA-256 hashes are stored in Firestore
+- **Show-once generation**: Raw keys are only returned once during creation
+- **Project-scoped access**: Keys are bound to specific projects
+- **Expiration support**: Optional expiration dates for temporary keys
+- **Usage tracking**: `lastUsedAt` timestamp updated on each use
+
+### Firestore Data Model
+
+API keys are stored in Firestore:
+
+```
+projects/{projectId}/apiKeys/{keyId}
+├── id: string
+├── name: string          # e.g., "CI/CD Key"
+├── prefix: string        # First 12 chars for display
+├── hash: string          # SHA-256 hash (raw key NEVER stored)
+├── status: 'active' | 'revoked'
+├── createdAt: Date
+├── createdBy: string
+├── lastUsedAt?: Date     # Updated on each auth
+├── expiresAt?: Date      # Optional expiration
+├── revokedAt?: Date
+└── revokedBy?: string
+```
+
+For detailed deployment instructions, see:
+- **[API_KEY_DEPLOYMENT_GUIDE.md](docs/API_KEY_DEPLOYMENT_GUIDE.md)** - Complete deployment guide
+- **[API_KEY_IMPLEMENTATION_CHANGELOG.md](docs/API_KEY_IMPLEMENTATION_CHANGELOG.md)** - Implementation details
 
 ### Data Model
 
@@ -416,47 +472,110 @@ This separation ensures that development and testing activities never interfere 
 
 ## API Endpoints
 
-### `POST /upload/:project/:version`
+### Authentication
+
+Protected endpoints require an `X-API-Key` header with a valid API key:
+
+```bash
+curl -X POST \
+  -H "X-API-Key: scry_proj_my-project_your-api-key-here" \
+  https://your-worker.workers.dev/upload/my-project/v1.0.0 \
+  ...
+```
+
+#### Authentication Errors
+
+| Status | Error | Message |
+|--------|-------|---------|
+| 401 | Authentication required | Missing X-API-Key header |
+| 401 | Invalid API key format | The provided API key has an invalid format |
+| 401 | Invalid API key | The provided API key is invalid or has been revoked |
+| 403 | Project mismatch | The API key does not belong to the requested project |
+
+### `GET /health`
+
+Health check endpoint (no authentication required).
+
+-   **Success Response** (`200 OK`):
+    ```json
+    {
+      "status": "ok",
+      "timestamp": "2025-01-01T00:00:00.000Z"
+    }
+    ```
+
+### `POST /upload/:project/:version` 🔒
 
 Uploads a zipped Storybook build directly to the service.
+
+⚠️ **Requires `X-API-Key` header**
 
 -   **URL Params**:
     -   `project` (string): The name of the project.
     -   `version` (string): The version of the Storybook build.
--   **Body**: The raw binary data of the `.zip` file.
+-   **Body**: The raw binary data of the `.zip` file or multipart form data.
 -   **Headers**:
-    -   `Content-Type`: `application/zip`
+    -   `X-API-Key`: Your project API key (required)
+    -   `Content-Type`: `application/zip` or `multipart/form-data`
 -   **Success Response** (`201 Created`):
     ```json
     {
+      "success": true,
       "message": "Upload successful",
+      "key": "my-project/v1.0.0/storybook.zip",
       "data": {
-        "url": "...",
-        "path": "...",
-        "versionId": "..."
+        "url": "https://...",
+        "path": "my-project/v1.0.0/storybook.zip",
+        "versionId": "...",
+        "buildId": "abc123def456",
+        "buildNumber": 1
       }
     }
     ```
 
-### `POST /presigned-url/:project/:version/:filename`
+### `POST /presigned-url/:project/:version/:filename` 🔒
 
 Generates a presigned URL that can be used for a direct client-side upload.
+
+⚠️ **Requires `X-API-Key` header**
 
 -   **URL Params**:
     -   `project` (string): The name of the project.
     -   `version` (string): The version of the Storybook build.
     -   `filename` (string): The name of the file to be uploaded (e.g., `storybook.zip`).
 -   **Headers**:
+    -   `X-API-Key`: Your project API key (required)
     -   `Content-Type` (string): The MIME type of the file to be uploaded (e.g., `application/zip`).
 -   **Success Response** (`200 OK`):
     ```json
     {
       "url": "https://...",
-      "key": "..."
+      "fields": {
+        "key": "my-project/v1.0.0/storybook.zip"
+      },
+      "buildId": "abc123def456",
+      "buildNumber": 1
     }
     ```
 
 The client can then use the returned `url` to `PUT` the file directly to the storage provider.
+
+### `GET /upload/:project/:version`
+
+Retrieves file information (no authentication required).
+
+-   **URL Params**:
+    -   `project` (string): The name of the project.
+    -   `version` (string): The version of the Storybook build.
+-   **Success Response** (`200 OK`):
+    ```json
+    {
+      "project": "my-project",
+      "version": "v1.0.0",
+      "key": "my-project/v1.0.0/storybook.zip",
+      "available": true
+    }
+    ```
 
 ## Enhanced Setup Guide
 
@@ -530,8 +649,9 @@ curl http://localhost:3000/
 ```bash
 curl -X POST \
   -H "Content-Type: application/zip" \
-  --data-binary @/home/boxuser/scry/scry-storybook-upload-service/storybook-fixed.zip \
-  https://storybook-deployment-service.epinnock.workers.dev/upload/test-project/v1.0.62
+  -H "X-API-Key: scry_proj_test-project_your-api-key-here" \
+  --data-binary @test.zip \
+  http://localhost:3000/upload/test-project/v1.0.0
 ```
 **Expected Response**: `201 Created`
 ```json
@@ -549,6 +669,7 @@ curl -X POST \
 ```bash
 curl -X POST \
   -H "Content-Type: application/zip" \
+  -H "X-API-Key: scry_proj_test-project_your-api-key-here" \
   http://localhost:3000/presigned-url/test-project/v1.0.0/storybook.zip
 ```
 **Expected Response**: `200 OK`
@@ -568,15 +689,16 @@ curl -X POST \
 # First, get the presigned URL (save the response)
 PRESIGNED_RESPONSE=$(curl -s -X POST \
   -H "Content-Type: application/zip" \
-https://storybook-deployment-service.epinnock.workers.dev/presigned-url/test-project/v1.0.e/storybook.zip)
+  -H "X-API-Key: scry_proj_test-project_your-api-key-here" \
+  http://localhost:3000/presigned-url/test-project/v1.0.0/storybook.zip)
 
 # Extract the URL (requires jq)
 PRESIGNED_URL=$(echo $PRESIGNED_RESPONSE | jq -r '.url')
 
-# Upload the file using the presigned URL
+# Upload the file directly to R2 using the presigned URL (no API key needed)
 curl -X PUT \
   -H "Content-Type: application/zip" \
-  --data-binary @storybook-fixed.zip \
+  --data-binary @test.zip \
   "$PRESIGNED_URL"
 ```
 **Expected Response**: `200 OK` (from R2 directly)
@@ -634,8 +756,9 @@ curl http://localhost:8787/health
 ```bash
 curl -X POST \
   -H "Content-Type: application/zip" \
+  -H "X-API-Key: scry_proj_test-project_your-api-key-here" \
   --data-binary @test.zip \
-  http://localhost:3000/upload/test-project/v1.0.0
+  http://localhost:8787/upload/test-project/v1.0.0
 ```
 **Expected Response**: `201 Created` (same format as Node.js)
 
@@ -643,6 +766,7 @@ curl -X POST \
 ```bash
 curl -X POST \
   -H "Content-Type: application/zip" \
+  -H "X-API-Key: scry_proj_test-project_your-api-key-here" \
   http://localhost:8787/presigned-url/test-project/v1.0.0/storybook.zip
 ```
 **Expected Response**: `200 OK`
@@ -659,13 +783,15 @@ curl -X POST \
 
 #### 5. Test file upload using presigned URL:
 ```bash
-# Get presigned URL and upload (same commands as Node.js, but port 8787)
+# Get presigned URL (same commands as Node.js, but port 8787)
 PRESIGNED_RESPONSE=$(curl -s -X POST \
   -H "Content-Type: application/zip" \
+  -H "X-API-Key: scry_proj_test-project_your-api-key-here" \
   http://localhost:8787/presigned-url/test-project/v1.0.0/storybook.zip)
 
 PRESIGNED_URL=$(echo $PRESIGNED_RESPONSE | jq -r '.url')
 
+# Upload directly to R2 (no API key needed for presigned URL)
 curl -X PUT \
   -H "Content-Type: application/zip" \
   --data-binary @test.zip \
@@ -702,8 +828,9 @@ curl https://pub-my-storybooks-production.{userid}.r2.dev/test-project/v1.0.0/st
 Common error responses:
 
 - **400 Bad Request**: Missing required parameters or invalid Content-Type
+- **401 Unauthorized**: Missing or invalid API key
+- **403 Forbidden**: Invalid credentials, bucket permissions, or API key project mismatch
 - **500 Internal Server Error**: Configuration issues (check credentials)
-- **403 Forbidden**: Invalid credentials or bucket permissions
 
 **R2 Public Access Errors**:
 If downloads fail with errors like:
@@ -737,10 +864,13 @@ Use presigned URLs for large files or when you want to reduce server load.
 Once deployed to production, you can test the presigned URL generation and verify Firebase build tracking:
 
 ```bash
+# First, create an API key for your project (see API_KEY_DEPLOYMENT_GUIDE.md)
+
 # Generate presigned URL (creates build record in Firestore)
 PRESIGNED_RESPONSE=$(curl -s -X POST \
   -H "Content-Type: application/zip" \
-  https://storybook-deployment-service.epinnock.workers.dev/presigned-url/myproject/0.0.1/storybook.zip)
+  -H "X-API-Key: scry_proj_myproject_your-api-key-here" \
+  https://your-worker.workers.dev/presigned-url/myproject/0.0.1/storybook.zip)
 
 # View the response with build tracking info
 echo $PRESIGNED_RESPONSE | jq '.'
@@ -800,3 +930,51 @@ https://pub-my-storybooks-production.{userid}.r2.dev/myproject/0.0.1/storybook.z
 ```
 
 The `zipUrl` field in the build record stored in Firestore contains this exact public URL for easy reference.
+
+## API Key Management
+
+### Creating API Keys
+
+API keys can be created through:
+
+1. **Firebase Console** - Manually create documents in `projects/{projectId}/apiKeys`
+2. **Dashboard API** - Implement management endpoints in your dashboard
+3. **CLI Script** - Use the provided scripts in the deployment guide
+
+For detailed instructions, see [API_KEY_DEPLOYMENT_GUIDE.md](docs/API_KEY_DEPLOYMENT_GUIDE.md).
+
+### Key Generation Script
+
+```bash
+# Generate a new API key locally
+node -e "
+const crypto = require('crypto');
+const projectId = 'your-project-id';
+const randomPart = crypto.randomBytes(32).toString('base64url');
+const rawKey = \`scry_proj_\${projectId}_\${randomPart}\`;
+const hash = crypto.createHash('sha256').update(rawKey).digest('hex');
+console.log('Raw Key (save this!):', rawKey);
+console.log('Hash (store in Firestore):', hash);
+console.log('Prefix:', rawKey.slice(0, 12));
+"
+```
+
+### Revoking Keys
+
+To revoke an API key:
+1. Navigate to `projects/{projectId}/apiKeys/{keyId}` in Firebase Console
+2. Set `status` to `"revoked"`
+3. Optionally set `revokedAt` and `revokedBy` fields
+
+Revoked keys are immediately rejected by the authentication middleware.
+
+## Documentation
+
+Additional documentation is available in the `docs/` directory:
+
+- [API_KEY_DEPLOYMENT_GUIDE.md](docs/API_KEY_DEPLOYMENT_GUIDE.md) - Complete API key deployment guide
+- [API_KEY_IMPLEMENTATION_CHANGELOG.md](docs/API_KEY_IMPLEMENTATION_CHANGELOG.md) - Implementation details
+- [API_KEY_IMPLEMENTATION.md](docs/API_KEY_IMPLEMENTATION.md) - Technical specification
+- [PRESIGNED_URL_TROUBLESHOOTING.md](docs/PRESIGNED_URL_TROUBLESHOOTING.md) - Troubleshooting presigned URLs
+- [PRODUCTION_SETUP.md](docs/PRODUCTION_SETUP.md) - Production deployment guide
+- [STORAGE_FLOW_OVERVIEW.md](docs/STORAGE_FLOW_OVERVIEW.md) - Storage architecture overview

@@ -6,6 +6,7 @@ import { app } from './app.js';
 import { R2S3StorageService } from './services/storage/storage.node.js';
 import { MockStorageService } from './services/storage/storage.mock.js';
 import { FirestoreServiceNode } from './services/firestore/firestore.node.js';
+import { ApiKeyServiceNode } from './services/apikey/apikey.node.js';
 import type { AppEnv } from './app.js';
 import admin from 'firebase-admin';
 
@@ -83,11 +84,15 @@ nodeApp.use('*', async (c, next) => {
     : new R2S3StorageService(config.r2);
   c.set('storage', storageService);
   
-  // Initialize Firestore service if Firebase is configured
+  // Initialize Firestore and API Key services if Firebase is configured
   if (admin.apps.length > 0) {
     const serviceAccountId = process.env.FIRESTORE_SERVICE_ACCOUNT_ID || 'upload-service';
     const firestoreService = new FirestoreServiceNode(serviceAccountId);
     c.set('firestore', firestoreService);
+    
+    // Initialize API Key service for authentication
+    const apiKeyService = new ApiKeyServiceNode();
+    c.set('apiKeyService', apiKeyService);
   }
   
   await next();

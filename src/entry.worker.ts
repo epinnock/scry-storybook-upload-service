@@ -5,6 +5,7 @@ import { app } from './app';
 import { R2S3StorageService } from './services/storage/storage.worker';
 import { MockStorageService } from './services/storage/storage.mock';
 import { FirestoreServiceWorker } from './services/firestore/firestore.worker';
+import { ApiKeyServiceWorker } from './services/apikey/apikey.worker';
 import type { AppEnv } from './app';
 
 /**
@@ -50,11 +51,34 @@ workerApp.use('*', async (c, next) => {
     // Use mock storage service for testing
     storageService = new MockStorageService();
   } else {
+    // Validate R2 credentials are properly configured
+    const accessKeyId = c.env.R2_S3_ACCESS_KEY_ID;
+    const secretAccessKey = c.env.R2_S3_SECRET_ACCESS_KEY;
+    const accountId = c.env.R2_ACCOUNT_ID;
+    
+    // R2 access key IDs should be exactly 32 characters
+    if (accessKeyId && accessKeyId.length !== 32) {
+      console.error(`[CONFIG ERROR] R2_S3_ACCESS_KEY_ID has length ${accessKeyId.length}, should be 32. ` +
+        `This usually means the secret was not properly set via 'wrangler secret put R2_S3_ACCESS_KEY_ID'. ` +
+        `Check if placeholder values in wrangler.toml are overriding secrets.`);
+    }
+    
+    // Log config status (without revealing sensitive values)
+    console.log('[INFO] R2 Config Status:', {
+      hasAccountId: !!accountId,
+      accountIdLength: accountId?.length,
+      hasAccessKeyId: !!accessKeyId,
+      accessKeyIdLength: accessKeyId?.length,
+      hasSecretAccessKey: !!secretAccessKey,
+      hasBucketName: !!c.env.R2_BUCKET_NAME,
+      hasBucketBinding: !!c.env.STORYBOOK_BUCKET
+    });
+    
     // Assemble the configuration for the S3 client from environment variables.
     const r2Config = {
-      accountId: c.env.R2_ACCOUNT_ID,
-      accessKeyId: c.env.R2_S3_ACCESS_KEY_ID,
-      secretAccessKey: c.env.R2_S3_SECRET_ACCESS_KEY,
+      accountId: accountId,
+      accessKeyId: accessKeyId,
+      secretAccessKey: secretAccessKey,
       bucketName: c.env.R2_BUCKET_NAME,
     };
 
@@ -65,7 +89,7 @@ workerApp.use('*', async (c, next) => {
   // Place the service instance into the context for downstream handlers.
   c.set('storage', storageService);
   
-  // Initialize Firestore service if Firebase credentials are configured
+  // Initialize Firestore and API Key services if Firebase credentials are configured
   if (c.env.FIREBASE_PROJECT_ID && c.env.FIREBASE_CLIENT_EMAIL && c.env.FIREBASE_PRIVATE_KEY) {
     const firestoreConfig = {
       projectId: c.env.FIREBASE_PROJECT_ID,
@@ -75,6 +99,15 @@ workerApp.use('*', async (c, next) => {
     };
     const firestoreService = new FirestoreServiceWorker(firestoreConfig);
     c.set('firestore', firestoreService);
+    
+    // Initialize API Key service for authentication
+    const apiKeyConfig = {
+      projectId: c.env.FIREBASE_PROJECT_ID,
+      clientEmail: c.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: c.env.FIREBASE_PRIVATE_KEY
+    };
+    const apiKeyService = new ApiKeyServiceWorker(apiKeyConfig);
+    c.set('apiKeyService', apiKeyService);
   }
 
   await next();

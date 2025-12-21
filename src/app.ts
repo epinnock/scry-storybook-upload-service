@@ -10,6 +10,8 @@ import busboy from 'busboy';
 import { Readable } from 'stream';
 import type { StorageService } from './services/storage/storage.service.js';
 import type { FirestoreService } from './services/firestore/firestore.service.js';
+import type { ApiKeyService } from './services/apikey/apikey.service.js';
+import { apiKeyAuth, type AuthVariables } from './middleware/auth.js';
 
 // Define the application's environment, including injectable variables.
 export type AppEnv = {
@@ -17,13 +19,19 @@ export type AppEnv = {
   Variables: {
     storage: StorageService;
     firestore?: FirestoreService; // Optional to support gradual rollout
-  };
+    apiKeyService?: ApiKeyService; // Optional for API key authentication
+  } & AuthVariables;
 };
 
 const app = new OpenAPIHono<AppEnv>();
 
 // Add request logging middleware
 app.use('*', logger());
+
+// Add API key authentication middleware to protected routes
+// This middleware validates the X-API-Key header against Firestore-stored keys
+app.use('/upload/*', apiKeyAuth());
+app.use('/presigned-url/*', apiKeyAuth());
 
 // Utility function to parse multipart form data using busboy
 async function parseMultipartFormData(request: Request): Promise<{ file?: File; fields: Record<string, string> }> {
@@ -91,7 +99,11 @@ async function parseMultipartFormData(request: Request): Promise<{ file?: File; 
 // Define Zod schemas for parameters and responses
 const ProjectVersionParamsSchema = z.object({
   project: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/, 'Project name must contain only alphanumeric characters, hyphens, and underscores').openapi({ example: 'my-project' }),
-  version: z.string().min(1).openapi({ example: '1.0.0' })
+  version: z.string().min(1).openapi({ 
+    example: 'v1.0.0',
+    description: 'Version identifier - supports semantic versions (v1.0.0), PR builds (pr-001), extended versions (v0.0.0.1), and named releases (beta-2024, dev-123, staging, latest)',
+    examples: ['v1.0.0', 'pr-001', 'v0.0.0.1', 'beta-2024', 'dev-snapshot-123', 'staging', 'latest', 'main']
+  })
 });
 
 const ProjectVersionFilenameParamsSchema = z.object({
@@ -128,6 +140,11 @@ const CleanupResponseSchema = z.object({
 
 const ErrorResponseSchema = z.object({
   error: z.string()
+});
+
+const AuthErrorResponseSchema = z.object({
+  error: z.string(),
+  message: z.string()
 });
 
 // Health check route
@@ -174,6 +191,22 @@ const uploadRoute = createRoute({
       content: {
         'application/json': {
           schema: ErrorResponseSchema
+        }
+      }
+    },
+    401: {
+      description: 'Unauthorized - Invalid or missing API key',
+      content: {
+        'application/json': {
+          schema: AuthErrorResponseSchema
+        }
+      }
+    },
+    403: {
+      description: 'Forbidden - API key does not belong to the requested project',
+      content: {
+        'application/json': {
+          schema: AuthErrorResponseSchema
         }
       }
     },
@@ -381,6 +414,22 @@ const presignedUrlRoute = createRoute({
           schema: PresignedUrlResponseSchema
         }
       }
+    },
+    401: {
+      description: 'Unauthorized - Invalid or missing API key',
+      content: {
+        'application/json': {
+          schema: AuthErrorResponseSchema
+        }
+      }
+    },
+    403: {
+      description: 'Forbidden - API key does not belong to the requested project',
+      content: {
+        'application/json': {
+          schema: AuthErrorResponseSchema
+        }
+      }
     }
   }
 });
@@ -434,7 +483,7 @@ app.openapi(presignedUrlRoute, async (c) => {
     },
     ...(buildId && { buildId }),
     ...(buildNumber !== undefined && { buildNumber })
-  });
+  }, 200);
 });
 
 // Cleanup route

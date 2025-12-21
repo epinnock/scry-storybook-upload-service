@@ -225,7 +225,7 @@ wrangler r2 bucket cors get my-storybooks-production
 
 ### List Recent Uploads
 ```bash
-export CLOUDFLARE_API_TOKEN="DAdWXw1EcjG-aSq7Gu-zzNJrO6lwZpgpP3uhUzFT"
+export CLOUDFLARE_API_TOKEN="DAdWXw1EcjG-aSq7Gu-...FT"
 wrangler r2 object list my-storybooks-production --limit 10
 ```
 
