@@ -34,15 +34,19 @@ preview_bucket_name = "my-storybooks-staging"
 # Example: `wrangler secret put R2_ACCOUNT_ID`
 
 [vars]
-# These are placeholders for production. Actual values are set via:
-# - .dev.vars file for local development (wrangler dev)
-# - wrangler secret put commands for production deployment
-R2_ACCOUNT_ID = "f54b9c10de9d140756dbf449aa124f1e"
+# Non-sensitive configuration values
+# NOTE: R2_ACCOUNT_ID is set via secrets for security (even though it's not highly sensitive)
 R2_BUCKET_NAME = "my-storybooks-production"
-# Note: Sensitive credentials should NOT be stored in this file.
-# Set these via .dev.vars for local development:
-R2_S3_ACCESS_KEY_ID = "placeholder-set-via-dev-vars-or-secrets"
-R2_S3_SECRET_ACCESS_KEY = "placeholder-set-via-dev-vars-or-secrets"
+
+# IMPORTANT: The following secrets MUST be set via `wrangler secret put`:
+# - R2_ACCOUNT_ID (your Cloudflare account ID)
+# - R2_S3_ACCESS_KEY_ID (32-character access key ID)
+# - R2_S3_SECRET_ACCESS_KEY (secret access key)
+# - FIREBASE_PROJECT_ID
+# - FIREBASE_CLIENT_EMAIL
+# - FIREBASE_PRIVATE_KEY
+#
+# DO NOT add placeholder values here - they will override secrets!
 
 # Preview environment for PR deployments
 [env.preview]

@@ -1,0 +1,452 @@
+import type { ApiKeyService } from './apikey.service.js';
+import type {
+  ApiKey,
+  CreateApiKeyData,
+  CreateApiKeyResult,
+  ValidateApiKeyResult,
+  ApiKeyListItem,
+} from './apikey.types.js';
+import {
+  generateApiKey,
+  hashApiKey,
+  getKeyPrefix,
+  generateKeyId,
+  isValidApiKeyFormat,
+} from './apikey.utils.js';
+
+interface ApiKeyWorkerConfig {
+  projectId: string;
+  clientEmail: string;
+  privateKey: string;
+}
+
+/**
+ * Cloudflare Worker implementation of ApiKeyService using Firestore REST API
+ * This implementation uses service account authentication via JWT tokens
+ */
+export class ApiKeyServiceWorker implements ApiKeyService {
+  private config: ApiKeyWorkerConfig;
+  private baseUrl: string;
+  private accessToken: string | null = null;
+  private tokenExpiry: number = 0;
+
+  constructor(config: ApiKeyWorkerConfig) {
+    this.config = config;
+    this.baseUrl = `https://firestore.googleapis.com/v1/projects/${config.projectId}/databases/(default)/documents`;
+  }
+
+  /**
+   * Creates a new API key for a project
+   */
+  async createApiKey(
+    projectId: string,
+    data: CreateApiKeyData
+  ): Promise<CreateApiKeyResult> {
+    const token = await this.getAccessToken();
+    
+    // Generate the raw key
+    const rawKey = generateApiKey(projectId);
+    
+    // Hash the key for storage
+    const hash = await hashApiKey(rawKey);
+    
+    // Get the prefix for identification
+    const prefix = getKeyPrefix(rawKey);
+    
+    // Generate document ID
+    const keyId = generateKeyId();
+    
+    // Create the key document
+    const now = new Date();
+    const keyPath = `projects/${projectId}/apiKeys/${keyId}`;
+    
+    const keyDoc: any = {
+      name: { stringValue: data.name },
+      prefix: { stringValue: prefix },
+      hash: { stringValue: hash },
+      status: { stringValue: 'active' },
+      createdAt: { timestampValue: now.toISOString() },
+      createdBy: { stringValue: data.createdBy },
+    };
+
+    if (data.expiresAt) {
+      keyDoc.expiresAt = { timestampValue: data.expiresAt.toISOString() };
+    }
+
+    await this.setDocument(keyPath, keyDoc, token);
+
+    // Return the result with raw key (only time it's available)
+    const apiKeyMetadata: Omit<ApiKey, 'hash'> = {
+      id: keyId,
+      name: data.name,
+      prefix,
+      status: 'active',
+      createdAt: now,
+      createdBy: data.createdBy,
+      ...(data.expiresAt && { expiresAt: data.expiresAt }),
+    };
+
+    return {
+      apiKey: apiKeyMetadata,
+      rawKey,
+    };
+  }
+
+  /**
+   * Validates an API key and returns its metadata if valid
+   */
+  async validateApiKey(
+    projectId: string,
+    rawKey: string
+  ): Promise<ValidateApiKeyResult> {
+    // Validate key format
+    if (!isValidApiKeyFormat(rawKey)) {
+      return {
+        valid: false,
+        error: 'Invalid API key format',
+      };
+    }
+
+    const token = await this.getAccessToken();
+    
+    // Hash the incoming key
+    const hash = await hashApiKey(rawKey);
+
+    // Query for matching active key
+    const structuredQuery = {
+      from: [{ collectionId: 'apiKeys' }],
+      where: {
+        compositeFilter: {
+          op: 'AND',
+          filters: [
+            {
+              fieldFilter: {
+                field: { fieldPath: 'hash' },
+                op: 'EQUAL',
+                value: { stringValue: hash },
+              },
+            },
+            {
+              fieldFilter: {
+                field: { fieldPath: 'status' },
+                op: 'EQUAL',
+                value: { stringValue: 'active' },
+              },
+            },
+          ],
+        },
+      },
+      limit: 1,
+    };
+
+    const docs = await this.queryDocuments(`projects/${projectId}`, structuredQuery, token);
+
+    if (docs.length === 0) {
+      return {
+        valid: false,
+        error: 'Invalid or revoked API key',
+      };
+    }
+
+    const doc = docs[0];
+    const fields = doc.fields;
+
+    // Check expiration
+    if (fields.expiresAt?.timestampValue) {
+      const expiresAt = new Date(fields.expiresAt.timestampValue);
+      if (expiresAt < new Date()) {
+        return {
+          valid: false,
+          error: 'API key has expired',
+        };
+      }
+    }
+
+    // Extract document ID from the name
+    const docId = doc.name.split('/').pop()!;
+
+    // Return valid result
+    const apiKey: Omit<ApiKey, 'hash'> = {
+      id: docId,
+      name: fields.name?.stringValue || '',
+      prefix: fields.prefix?.stringValue || '',
+      status: fields.status?.stringValue as 'active' | 'revoked' || 'active',
+      createdAt: new Date(fields.createdAt?.timestampValue || new Date()),
+      createdBy: fields.createdBy?.stringValue || '',
+      lastUsedAt: fields.lastUsedAt?.timestampValue ? new Date(fields.lastUsedAt.timestampValue) : undefined,
+      expiresAt: fields.expiresAt?.timestampValue ? new Date(fields.expiresAt.timestampValue) : undefined,
+      revokedAt: fields.revokedAt?.timestampValue ? new Date(fields.revokedAt.timestampValue) : undefined,
+      revokedBy: fields.revokedBy?.stringValue,
+    };
+
+    return {
+      valid: true,
+      apiKey,
+    };
+  }
+
+  /**
+   * Lists all API keys for a project (without hash data)
+   */
+  async listApiKeys(projectId: string): Promise<ApiKeyListItem[]> {
+    const token = await this.getAccessToken();
+    
+    const structuredQuery = {
+      from: [{ collectionId: 'apiKeys' }],
+      orderBy: [{ field: { fieldPath: 'createdAt' }, direction: 'DESCENDING' }],
+    };
+
+    const docs = await this.queryDocuments(`projects/${projectId}`, structuredQuery, token);
+
+    return docs.map((doc) => {
+      const fields = doc.fields;
+      const docId = doc.name.split('/').pop()!;
+      
+      return {
+        id: docId,
+        name: fields.name?.stringValue || '',
+        prefix: fields.prefix?.stringValue || '',
+        status: fields.status?.stringValue as 'active' | 'revoked' || 'active',
+        createdAt: new Date(fields.createdAt?.timestampValue || new Date()),
+        createdBy: fields.createdBy?.stringValue || '',
+        lastUsedAt: fields.lastUsedAt?.timestampValue ? new Date(fields.lastUsedAt.timestampValue) : undefined,
+        expiresAt: fields.expiresAt?.timestampValue ? new Date(fields.expiresAt.timestampValue) : undefined,
+        revokedAt: fields.revokedAt?.timestampValue ? new Date(fields.revokedAt.timestampValue) : undefined,
+        revokedBy: fields.revokedBy?.stringValue,
+      };
+    });
+  }
+
+  /**
+   * Revokes an API key
+   */
+  async revokeApiKey(
+    projectId: string,
+    keyId: string,
+    userId: string
+  ): Promise<void> {
+    const token = await this.getAccessToken();
+    const keyPath = `projects/${projectId}/apiKeys/${keyId}`;
+    
+    const fields = {
+      status: { stringValue: 'revoked' },
+      revokedAt: { timestampValue: new Date().toISOString() },
+      revokedBy: { stringValue: userId },
+    };
+
+    await this.patchDocument(keyPath, fields, token);
+  }
+
+  /**
+   * Deletes an API key permanently
+   */
+  async deleteApiKey(
+    projectId: string,
+    keyId: string
+  ): Promise<void> {
+    const token = await this.getAccessToken();
+    const keyPath = `projects/${projectId}/apiKeys/${keyId}`;
+    
+    const url = `${this.baseUrl}/${keyPath}`;
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to delete API key: ${response.statusText}`);
+    }
+  }
+
+  /**
+   * Updates the lastUsedAt timestamp for an API key
+   */
+  async updateLastUsed(
+    projectId: string,
+    keyId: string
+  ): Promise<void> {
+    const token = await this.getAccessToken();
+    const keyPath = `projects/${projectId}/apiKeys/${keyId}`;
+    
+    const fields = {
+      lastUsedAt: { timestampValue: new Date().toISOString() },
+    };
+
+    await this.patchDocument(keyPath, fields, token);
+  }
+
+  /**
+   * Helper methods for Firestore REST API operations
+   */
+
+  private async setDocument(path: string, fields: any, token: string): Promise<void> {
+    const url = `${this.baseUrl}/${path}`;
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ fields }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to set document: ${response.statusText}`);
+    }
+  }
+
+  private async patchDocument(path: string, fields: any, token: string): Promise<void> {
+    const url = `${this.baseUrl}/${path}`;
+    const updateMask = Object.keys(fields).join(',');
+    
+    const response = await fetch(`${url}?updateMask.fieldPaths=${updateMask}`, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ fields }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to patch document: ${response.statusText}`);
+    }
+  }
+
+  private async queryDocuments(parent: string, structuredQuery: any, token: string): Promise<any[]> {
+    const url = `${this.baseUrl}/${parent}:runQuery`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ structuredQuery }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to query documents: ${response.statusText}`);
+    }
+
+    const results = await response.json() as any[];
+    return results.filter((r: any) => r.document).map((r: any) => r.document);
+  }
+
+  /**
+   * Generate access token using service account credentials
+   */
+  private async getAccessToken(): Promise<string> {
+    // Check if we have a valid cached token
+    if (this.accessToken && Date.now() < this.tokenExpiry) {
+      return this.accessToken;
+    }
+
+    // Create JWT
+    const jwt = await this.createJWT();
+
+    // Exchange JWT for access token
+    const response = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+        assertion: jwt,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to get access token: ${response.statusText}`);
+    }
+
+    const data = await response.json() as { access_token: string; expires_in: number };
+    this.accessToken = data.access_token;
+    this.tokenExpiry = Date.now() + (data.expires_in - 60) * 1000; // Refresh 1 minute before expiry
+
+    return this.accessToken!;
+  }
+
+  /**
+   * Create JWT token for service account authentication
+   */
+  private async createJWT(): Promise<string> {
+    const now = Math.floor(Date.now() / 1000);
+    const header = { alg: 'RS256', typ: 'JWT' };
+    const payload = {
+      iss: this.config.clientEmail,
+      sub: this.config.clientEmail,
+      aud: 'https://oauth2.googleapis.com/token',
+      iat: now,
+      exp: now + 3600,
+      scope: 'https://www.googleapis.com/auth/datastore',
+    };
+
+    const encodedHeader = this.base64UrlEncode(JSON.stringify(header));
+    const encodedPayload = this.base64UrlEncode(JSON.stringify(payload));
+    const unsignedToken = `${encodedHeader}.${encodedPayload}`;
+
+    // Sign with private key
+    const signature = await this.signJWT(unsignedToken, this.config.privateKey);
+    return `${unsignedToken}.${signature}`;
+  }
+
+  /**
+   * Sign JWT using RSA-SHA256
+   */
+  private async signJWT(data: string, privateKey: string): Promise<string> {
+    // Handle both literal \n and actual newlines in the private key
+    const cleanedKey = privateKey.replace(/\\n/g, '\n');
+    
+    const pemHeader = '-----BEGIN PRIVATE KEY-----';
+    const pemFooter = '-----END PRIVATE KEY-----';
+    
+    // Extract the content between the header and footer
+    const pemContents = cleanedKey
+      .replace(pemHeader, '')
+      .replace(pemFooter, '')
+      .replace(/\s/g, ''); // Remove all whitespace including newlines
+    
+    const binaryKey = Uint8Array.from(atob(pemContents), c => c.charCodeAt(0));
+    
+    const cryptoKey = await crypto.subtle.importKey(
+      'pkcs8',
+      binaryKey,
+      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+
+    // Sign the data
+    const encoder = new TextEncoder();
+    const signature = await crypto.subtle.sign(
+      'RSASSA-PKCS1-v1_5',
+      cryptoKey,
+      encoder.encode(data)
+    );
+
+    return this.base64UrlEncode(signature);
+  }
+
+  /**
+   * Base64 URL encode
+   */
+  private base64UrlEncode(data: string | ArrayBuffer): string {
+    let base64: string;
+    
+    if (typeof data === 'string') {
+      base64 = btoa(data);
+    } else {
+      const bytes = new Uint8Array(data);
+      const binary = String.fromCharCode(...bytes);
+      base64 = btoa(binary);
+    }
+    
+    return base64
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+  }
+}
