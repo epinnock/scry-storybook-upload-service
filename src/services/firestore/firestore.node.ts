@@ -1,7 +1,7 @@
 import admin from 'firebase-admin';
 import type { Firestore, FieldValue } from 'firebase-admin/firestore';
 import type { FirestoreService } from './firestore.service.js';
-import type { Build, CreateBuildData, UpdateBuildData, BuildStatus } from './firestore.types.js';
+import type { Build, BuildCoverage, CreateBuildData, UpdateBuildData, BuildStatus } from './firestore.types.js';
 
 /**
  * Node.js implementation of FirestoreService using Firebase Admin SDK
@@ -49,6 +49,7 @@ export class FirestoreServiceNode implements FirestoreService {
         status: 'active' as const,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         createdBy: this.serviceAccountId,
+        ...(data.coverage ? { coverage: data.coverage } : {}),
       };
 
       transaction.set(buildRef, buildData);
@@ -63,6 +64,7 @@ export class FirestoreServiceNode implements FirestoreService {
         status: 'active' as const,
         createdAt: new Date(),
         createdBy: this.serviceAccountId,
+        coverage: data.coverage,
       };
     });
   }
@@ -160,6 +162,18 @@ export class FirestoreServiceNode implements FirestoreService {
   }
 
   /**
+   * Updates coverage data for a build
+   */
+  async updateBuildCoverage(
+    projectId: string,
+    buildId: string,
+    coverage: BuildCoverage
+  ): Promise<void> {
+    const buildRef = this.db.doc(`projects/${projectId}/builds/${buildId}`);
+    await buildRef.update({ coverage } as any);
+  }
+
+  /**
    * Archives a build
    */
   async archiveBuild(
@@ -201,6 +215,7 @@ export class FirestoreServiceNode implements FirestoreService {
       createdBy: data.createdBy,
       archivedAt: data.archivedAt?.toDate?.(),
       archivedBy: data.archivedBy,
+      coverage: data.coverage,
     };
   }
 }

@@ -89,8 +89,11 @@ workerApp.use('*', async (c, next) => {
   // Place the service instance into the context for downstream handlers.
   c.set('storage', storageService);
   
-  // Initialize Firestore and API Key services if Firebase credentials are configured
-  if (c.env.FIREBASE_PROJECT_ID && c.env.FIREBASE_CLIENT_EMAIL && c.env.FIREBASE_PRIVATE_KEY) {
+  // Initialize Firestore and API Key services if Firebase credentials are configured.
+  //
+  // For local/e2e test mode we intentionally skip Firebase initialization to avoid
+  // requiring real API keys / Firestore credentials in automated tests.
+  if (!isTestMode && c.env.FIREBASE_PROJECT_ID && c.env.FIREBASE_CLIENT_EMAIL && c.env.FIREBASE_PRIVATE_KEY) {
     const firestoreConfig = {
       projectId: c.env.FIREBASE_PROJECT_ID,
       clientEmail: c.env.FIREBASE_CLIENT_EMAIL,

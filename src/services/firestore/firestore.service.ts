@@ -1,4 +1,4 @@
-import type { Build, CreateBuildData, UpdateBuildData, BuildStatus } from './firestore.types.js';
+import type { Build, BuildCoverage, CreateBuildData, UpdateBuildData, BuildStatus } from './firestore.types.js';
 
 /**
  * Defines the contract for all Firestore operations within the application.
@@ -84,6 +84,23 @@ export interface FirestoreService {
     projectId: string,
     buildId: string,
     userId: string
+  ): Promise<void>;
+
+  /**
+   * Updates coverage data for a build.
+   *
+   * This should store the normalized coverage object on the build document.
+   * The raw JSON payload is expected to be stored separately in object storage.
+   *
+   * @param projectId The project identifier
+   * @param buildId The build identifier
+   * @param coverage The coverage data to add
+   * @returns A promise that resolves when the update is complete
+   */
+  updateBuildCoverage(
+    projectId: string,
+    buildId: string,
+    coverage: BuildCoverage
   ): Promise<void>;
 
   /**

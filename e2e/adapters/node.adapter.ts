@@ -19,8 +19,13 @@ export class NodeAdapter implements TestAdapter {
     // Try to find an available port if the default is in use
     port = await this.findAvailablePort(port);
     
-    // Update config with the actual port we'll use
-    const actualConfig = { ...config, port, baseUrl: `http://localhost:${port}` };
+    // Mutate the config object so downstream health checks and client creation
+    // use the actual port that was selected.
+    config.port = port;
+    config.baseUrl = `http://localhost:${port}`;
+
+    // Keep an explicit local reference for env var merging and logging.
+    const actualConfig = { ...config, port, baseUrl: config.baseUrl };
 
     // Kill any existing processes on the port
     await this.killExistingProcess(port);

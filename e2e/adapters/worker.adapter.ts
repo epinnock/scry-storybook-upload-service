@@ -22,7 +22,7 @@ export class WorkerAdapter implements TestAdapter {
     const env = { ...process.env, ...config.envVars };
 
     // Spawn wrangler dev
-    this.devProcess = spawn('npx', ['wrangler', 'dev', '--port', port.toString()], {
+    this.devProcess = spawn('npx', ['wrangler', 'dev', '--port', port.toString(), '--var', 'NODE_ENV:test'], {
       stdio: 'pipe',
       env,
       cwd: process.cwd(),

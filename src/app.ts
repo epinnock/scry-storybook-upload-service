@@ -6,12 +6,13 @@ import { createRoute } from '@hono/zod-openapi';
 import { z } from 'zod';
 import { swaggerUI } from '@hono/swagger-ui';
 import { logger } from 'hono/logger';
-import busboy from 'busboy';
-import { Readable } from 'stream';
 import type { StorageService } from './services/storage/storage.service.js';
 import type { FirestoreService } from './services/firestore/firestore.service.js';
+import type { BuildCoverage, CreateBuildData } from './services/firestore/firestore.types.js';
 import type { ApiKeyService } from './services/apikey/apikey.service.js';
 import { apiKeyAuth, type AuthVariables } from './middleware/auth.js';
+import { normalizeCoverageInput } from './coverage/coverage.js';
+import { parseMultipartFormData } from './utils/multipart.js';
 
 // Define the application's environment, including injectable variables.
 export type AppEnv = {
@@ -32,69 +33,6 @@ app.use('*', logger());
 // This middleware validates the X-API-Key header against Firestore-stored keys
 app.use('/upload/*', apiKeyAuth());
 app.use('/presigned-url/*', apiKeyAuth());
-
-// Utility function to parse multipart form data using busboy
-async function parseMultipartFormData(request: Request): Promise<{ file?: File; fields: Record<string, string> }> {
-  return new Promise((resolve, reject) => {
-    const contentType = request.headers.get('content-type');
-    if (!contentType || !contentType.includes('multipart/form-data')) {
-      reject(new Error('Content-Type must be multipart/form-data'));
-      return;
-    }
-
-    let file: File | undefined;
-    const fields: Record<string, string> = {};
-    const chunks: Buffer[] = [];
-
-    const bb = busboy({ headers: { 'content-type': contentType } });
-
-    bb.on('file', (name, stream, info) => {
-      const { filename, mimeType } = info;
-      
-      stream.on('data', (chunk) => {
-        chunks.push(chunk);
-      });
-
-      stream.on('end', () => {
-        if (chunks.length > 0) {
-          const buffer = Buffer.concat(chunks);
-          file = new File([buffer], filename || 'upload', { type: mimeType || 'application/octet-stream' });
-        }
-      });
-    });
-
-    bb.on('field', (name, value) => {
-      fields[name] = value;
-    });
-
-    bb.on('finish', () => {
-      resolve({ file, fields });
-    });
-
-    bb.on('error', (err) => {
-      reject(err);
-    });
-
-    // Convert the request body to a readable stream
-    if (request.body) {
-      const reader = request.body.getReader();
-      const stream = new Readable({
-        read() {
-          reader.read().then(({ done, value }) => {
-            if (done) {
-              this.push(null);
-            } else {
-              this.push(Buffer.from(value));
-            }
-          }).catch(err => this.destroy(err));
-        }
-      });
-      stream.pipe(bb);
-    } else {
-      reject(new Error('No request body'));
-    }
-  });
-}
 
 // Define Zod schemas for parameters and responses
 const ProjectVersionParamsSchema = z.object({
@@ -121,7 +59,8 @@ const UploadResponseSchema = z.object({
     path: z.string(),
     versionId: z.string().optional(),
     buildId: z.string().optional(),
-    buildNumber: z.number().optional()
+    buildNumber: z.number().optional(),
+    coverageUrl: z.string().optional(),
   })
 });
 
@@ -246,36 +185,107 @@ app.openapi(uploadRoute, async (c) => {
     const filename = 'storybook.zip'; // Default or from form
     const key = `${project}/${version}/${filename}`;
 
+    // Enforce a simple request size limit. For large bodies, some runtimes may
+    // fail while streaming/parsing; checking Content-Length allows us to return
+    // a consistent 413 response early when available.
+    const maxSize = 5 * 1024 * 1024; // 5MB
+    const contentLengthHeader = c.req.header('content-length');
+    if (contentLengthHeader) {
+      const contentLength = Number(contentLengthHeader);
+      if (!Number.isNaN(contentLength) && contentLength > maxSize) {
+        return c.json({ error: 'File too large. Maximum size is 5MB' }, 413);
+      }
+    }
+
     // Handle both multipart form data and raw binary uploads
     let file: File;
+    let coveragePayload: unknown | undefined;
+    let coverageUrl: string | undefined;
+
     const contentType = c.req.header('content-type') || '';
-    
+
     if (contentType.includes('multipart/form-data')) {
       // Handle multipart form data
       try {
         // First try Hono's built-in formData method
         const formData = await c.req.formData();
         file = formData.get('file') as File;
-        
+
         if (!file || file.size === 0) {
           throw new Error('No file in FormData');
         }
+
+        const coverageFile = formData.get('coverage') as File | null;
+        const coverageJson = formData.get('coverageJson') as string | null;
+
+        if (coverageFile) {
+          const text = await coverageFile.text();
+          try {
+            coveragePayload = JSON.parse(text);
+          } catch {
+            return c.json({ error: 'Invalid coverage JSON' }, 400);
+          }
+        } else if (coverageJson) {
+          try {
+            coveragePayload = JSON.parse(coverageJson);
+          } catch {
+            return c.json({ error: 'Invalid coverage JSON' }, 400);
+          }
+        }
       } catch (formDataError) {
-        console.log('Hono FormData parsing failed, trying busboy fallback:', formDataError instanceof Error ? formDataError.message : String(formDataError));
-        
+        console.log(
+          'Hono FormData parsing failed, trying busboy fallback:',
+          formDataError instanceof Error ? formDataError.message : String(formDataError)
+        );
+
         // Fallback to busboy parser for Node.js compatibility
         try {
           const parsed = await parseMultipartFormData(c.req.raw);
-          file = parsed.file!;
-          
+          file = parsed.files.file;
+
           if (!file || file.size === 0) {
             return c.json({ error: 'No file provided or empty file' }, 400);
           }
+
+          const coverageFile = parsed.files.coverage;
+          const coverageJson = parsed.fields.coverageJson;
+
+          if (coverageFile) {
+            const text = await coverageFile.text();
+            try {
+              coveragePayload = JSON.parse(text);
+            } catch {
+              return c.json({ error: 'Invalid coverage JSON' }, 400);
+            }
+          } else if (coverageJson) {
+            try {
+              coveragePayload = JSON.parse(coverageJson);
+            } catch {
+              return c.json({ error: 'Invalid coverage JSON' }, 400);
+            }
+          }
         } catch (busboyError) {
           console.error('Busboy parsing failed:', busboyError);
-          return c.json({
-            error: 'Failed to parse file upload. Please ensure you are sending a valid multipart/form-data request with a file field named "file".'
-          }, 400);
+          return c.json(
+            {
+              error:
+                'Failed to parse file upload. Please ensure you are sending a valid multipart/form-data request with a file field named "file".',
+            },
+            400
+          );
+        }
+      }
+
+      // If coverage was provided, upload the raw JSON to storage.
+      if (coveragePayload) {
+        try {
+          const coverageKey = `${project}/${version}/coverage-report.json`;
+          const coverageBody = new Blob([JSON.stringify(coveragePayload)]).stream();
+          const coverageResult = await storage.upload(coverageKey, coverageBody, 'application/json');
+          coverageUrl = coverageResult.url;
+        } catch (coverageUploadError) {
+          console.error('Coverage upload error:', coverageUploadError);
+          return c.json({ error: 'Failed to upload coverage report' }, 500);
         }
       }
     } else {
@@ -298,7 +308,6 @@ app.openapi(uploadRoute, async (c) => {
     }
 
     // Check file size limit (5MB)
-    const maxSize = 5 * 1024 * 1024; // 5MB
     if (file.size > maxSize) {
       return c.json({ error: 'File too large. Maximum size is 5MB' }, 413);
     }
@@ -314,10 +323,19 @@ app.openapi(uploadRoute, async (c) => {
     
     if (firestore) {
       try {
-        const build = await firestore.createBuild(project, {
+        const buildData: CreateBuildData = {
           versionId: version,
-          zipUrl: result.url
-        });
+          zipUrl: result.url,
+          ...(coveragePayload && coverageUrl
+            ? {
+                coverage: normalizeCoverageInput(coveragePayload, {
+                  reportUrl: coverageUrl,
+                }) as BuildCoverage,
+              }
+            : {}),
+        };
+
+        const build = await firestore.createBuild(project, buildData);
         buildId = build.id;
         buildNumber = build.buildNumber;
       } catch (firestoreError) {
@@ -326,21 +344,176 @@ app.openapi(uploadRoute, async (c) => {
       }
     }
 
-    return c.json({
-      success: true,
-      message: 'Upload successful',
-      key: key,
-      data: {
-        ...result,
-        ...(buildId && { buildId }),
-        ...(buildNumber !== undefined && { buildNumber })
-      }
-    }, 201);
+    return c.json(
+      {
+        success: true,
+        message: 'Upload successful',
+        key: key,
+        data: {
+          ...result,
+          ...(buildId && { buildId }),
+          ...(buildNumber !== undefined && { buildNumber }),
+          ...(coverageUrl && { coverageUrl }),
+        },
+      },
+      201
+    );
   } catch (error) {
     console.error('Upload error:', error);
     return c.json({
       error: `Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`
     }, 500);
+  }
+});
+
+const CoverageUploadResponseSchema = z.object({
+  success: z.boolean(),
+  message: z.string(),
+  buildId: z.string(),
+  coverageUrl: z.string().optional(),
+});
+
+// Coverage upload route - upload JSON and update build
+const coverageUploadRoute = createRoute({
+  method: 'post',
+  path: '/upload/:project/:version/coverage',
+  request: {
+    params: ProjectVersionParamsSchema,
+  },
+  responses: {
+    201: {
+      description: 'Coverage upload successful',
+      content: {
+        'application/json': {
+          schema: CoverageUploadResponseSchema,
+        },
+      },
+    },
+    400: {
+      description: 'Invalid coverage data',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema,
+        },
+      },
+    },
+    401: {
+      description: 'Unauthorized',
+      content: {
+        'application/json': {
+          schema: AuthErrorResponseSchema,
+        },
+      },
+    },
+    404: {
+      description: 'Build not found',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema,
+        },
+      },
+    },
+    500: {
+      description: 'Internal server error',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema,
+        },
+      },
+    },
+  },
+});
+
+app.openapi(coverageUploadRoute, async (c) => {
+  try {
+    const storage = c.var.storage;
+    const firestore = c.var.firestore;
+    const { project, version } = c.req.valid('param');
+
+    if (!firestore) {
+      return c.json({ error: 'Firestore not configured' }, 500);
+    }
+
+    // Find the build for this version
+    const build = await firestore.getBuildByVersion(project, version);
+    if (!build) {
+      return c.json({ error: 'Build not found for this version' }, 404);
+    }
+
+    // Handle both JSON body and multipart form data
+    const contentType = c.req.header('content-type') || '';
+    let coveragePayload: unknown;
+
+    if (contentType.includes('multipart/form-data')) {
+      // Handle multipart - coverage JSON file upload
+      try {
+        const formData = await c.req.formData();
+        const file = (formData.get('file') as File | null) || (formData.get('coverage') as File | null);
+
+        if (!file) {
+          return c.json({ error: 'No coverage file provided' }, 400);
+        }
+
+        const fileContent = await file.text();
+        coveragePayload = JSON.parse(fileContent);
+      } catch (e) {
+        // Fallback to busboy parser for Node.js compatibility
+        try {
+          const parsed = await parseMultipartFormData(c.req.raw);
+          const file = parsed.files.file || parsed.files.coverage;
+
+          if (!file) {
+            return c.json({ error: 'No coverage file provided' }, 400);
+          }
+
+          const fileContent = await file.text();
+          coveragePayload = JSON.parse(fileContent);
+        } catch {
+          return c.json({ error: 'Invalid coverage JSON' }, 400);
+        }
+      }
+    } else {
+      try {
+        coveragePayload = await c.req.json();
+      } catch {
+        return c.json({ error: 'Invalid coverage JSON' }, 400);
+      }
+    }
+
+    // Always upload raw JSON to R2
+    const coverageKey = `${project}/${version}/coverage-report.json`;
+    const coverageBody = new Blob([JSON.stringify(coveragePayload)]).stream();
+    const coverageResult = await storage.upload(coverageKey, coverageBody, 'application/json');
+
+    let coverage: BuildCoverage;
+    try {
+      coverage = normalizeCoverageInput(coveragePayload, {
+        reportUrl: coverageResult.url,
+      }) as BuildCoverage;
+    } catch (e) {
+      return c.json({ error: 'Invalid coverage data' }, 400);
+    }
+
+    // Update build with coverage data
+    await firestore.updateBuildCoverage(project, build.id, coverage);
+
+    return c.json(
+      {
+        success: true,
+        message: 'Coverage uploaded successfully',
+        buildId: build.id,
+        coverageUrl: coverageResult.url,
+      },
+      201
+    );
+  } catch (error) {
+    console.error('Coverage upload error:', error);
+    return c.json(
+      {
+        error: `Coverage upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      },
+      500
+    );
   }
 });
 

@@ -1,5 +1,5 @@
 import type { FirestoreService } from './firestore.service.js';
-import type { Build, CreateBuildData, UpdateBuildData, BuildStatus } from './firestore.types.js';
+import type { Build, BuildCoverage, CreateBuildData, UpdateBuildData, BuildStatus } from './firestore.types.js';
 
 interface FirestoreConfig {
   projectId: string;
@@ -63,7 +63,8 @@ export class FirestoreServiceWorker implements FirestoreService {
       zipUrl: { stringValue: data.zipUrl },
       status: { stringValue: 'active' },
       createdAt: { timestampValue: now.toISOString() },
-      createdBy: { stringValue: this.config.serviceAccountId }
+      createdBy: { stringValue: this.config.serviceAccountId },
+      ...(data.coverage ? { coverage: this.toFirestoreValue(data.coverage) } : {}),
     };
 
     await this.setDocument(buildPath, buildDoc, token);
@@ -206,6 +207,7 @@ export class FirestoreServiceWorker implements FirestoreService {
     if (updates.zipUrl) fields.zipUrl = { stringValue: updates.zipUrl };
     if (updates.archivedAt) fields.archivedAt = { timestampValue: updates.archivedAt.toISOString() };
     if (updates.archivedBy) fields.archivedBy = { stringValue: updates.archivedBy };
+    if (updates.coverage) fields.coverage = this.toFirestoreValue(updates.coverage);
 
     await this.patchDocument(buildPath, fields, token);
   }
@@ -228,6 +230,20 @@ export class FirestoreServiceWorker implements FirestoreService {
     };
 
     await this.patchDocument(buildPath, fields, token);
+  }
+
+  /**
+   * Updates coverage data for a build
+   */
+  async updateBuildCoverage(
+    projectId: string,
+    buildId: string,
+    coverage: BuildCoverage
+  ): Promise<void> {
+    const token = await this.getAccessToken();
+    const buildPath = `projects/${projectId}/builds/${buildId}`;
+
+    await this.patchDocument(buildPath, { coverage: this.toFirestoreValue(coverage) }, token);
   }
 
   /**
@@ -256,6 +272,79 @@ export class FirestoreServiceWorker implements FirestoreService {
   /**
    * Helper methods for Firestore REST API operations
    */
+
+  /**
+   * Convert a JavaScript value into a Firestore REST "Value" object.
+   *
+   * This is used for nested objects (coverage payload) to keep the Worker
+   * implementation feature-parity with the Node Admin SDK version.
+   */
+  private toFirestoreValue(value: any): any {
+    if (value === null) return { nullValue: null };
+    if (value === undefined) return { nullValue: null };
+
+    if (value instanceof Date) return { timestampValue: value.toISOString() };
+
+    const t = typeof value;
+    if (t === 'string') return { stringValue: value };
+    if (t === 'boolean') return { booleanValue: value };
+    if (t === 'number') {
+      if (Number.isInteger(value)) return { integerValue: value.toString() };
+      return { doubleValue: value };
+    }
+
+    if (Array.isArray(value)) {
+      return {
+        arrayValue: {
+          values: value.map((v) => this.toFirestoreValue(v)),
+        },
+      };
+    }
+
+    if (t === 'object') {
+      const fields: Record<string, any> = {};
+      for (const [k, v] of Object.entries(value)) {
+        if (v === undefined) continue;
+        fields[k] = this.toFirestoreValue(v);
+      }
+      return { mapValue: { fields } };
+    }
+
+    // Fallback: coerce unknowns to string
+    return { stringValue: String(value) };
+  }
+
+  /**
+   * Convert a Firestore REST "Value" object back into JavaScript.
+   *
+   * This is only used for returning typed data from read operations.
+   */
+  private fromFirestoreValue(value: any): any {
+    if (!value || typeof value !== 'object') return value;
+
+    if ('nullValue' in value) return null;
+    if ('booleanValue' in value) return value.booleanValue;
+    if ('integerValue' in value) return parseInt(value.integerValue, 10);
+    if ('doubleValue' in value) return value.doubleValue;
+    if ('stringValue' in value) return value.stringValue;
+    if ('timestampValue' in value) return value.timestampValue;
+
+    if ('mapValue' in value) {
+      const fields = value.mapValue?.fields || {};
+      const obj: Record<string, any> = {};
+      for (const [k, v] of Object.entries(fields)) {
+        obj[k] = this.fromFirestoreValue(v);
+      }
+      return obj;
+    }
+
+    if ('arrayValue' in value) {
+      const values = value.arrayValue?.values || [];
+      return values.map((v: any) => this.fromFirestoreValue(v));
+    }
+
+    return value;
+  }
 
   private async getDocument(path: string, token: string): Promise<any> {
     const url = `${this.baseUrl}/${path}`;
@@ -344,6 +433,7 @@ export class FirestoreServiceWorker implements FirestoreService {
       createdBy: fields.createdBy?.stringValue || '',
       archivedAt: fields.archivedAt?.timestampValue ? new Date(fields.archivedAt.timestampValue) : undefined,
       archivedBy: fields.archivedBy?.stringValue,
+      coverage: fields.coverage ? (this.fromFirestoreValue(fields.coverage) as any) : undefined,
     };
   }
 
