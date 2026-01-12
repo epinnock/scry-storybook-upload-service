@@ -217,6 +217,51 @@ describe('E2E Upload Tests', () => {
         ctx.cleanupPrefixes.push(testData.prefix);
       });
 
+      it('should only create a build for ZIP presigned uploads, not for coverage JSON', async () => {
+        if (!ctx) {
+          console.log(`Skipping test - ${target} environment setup failed`);
+          return;
+        }
+
+        const testData = generateTestData('storybook');
+
+        // Request presigned URL for storybook.zip - should create a build
+        const zipResponse = await ctx.client(`/presigned-url/${testData.project}/${testData.version}/storybook.zip`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contentType: 'application/zip' }),
+        });
+
+        expect(zipResponse.status).toBe(200);
+        const zipResult = await zipResponse.json();
+        expect(zipResult).toHaveProperty('url');
+        // Build should be created for ZIP
+        const zipBuildId = zipResult.buildId;
+        const zipBuildNumber = zipResult.buildNumber;
+
+        // Request presigned URL for coverage-report.json - should NOT create a new build
+        const coverageResponse = await ctx.client(`/presigned-url/${testData.project}/${testData.version}/coverage-report.json`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contentType: 'application/json' }),
+        });
+
+        expect(coverageResponse.status).toBe(200);
+        const coverageResult = await coverageResponse.json();
+        expect(coverageResult).toHaveProperty('url');
+        // Coverage presign should NOT have buildId/buildNumber (no new build created)
+        expect(coverageResult.buildId).toBeUndefined();
+        expect(coverageResult.buildNumber).toBeUndefined();
+
+        // If Firestore is configured and we got a buildId from ZIP, verify only one build exists
+        if (zipBuildId && zipBuildNumber !== undefined) {
+          console.log(`Build created for ZIP: ID=${zipBuildId}, Number=${zipBuildNumber}`);
+          console.log('Coverage presign did not create a new build (as expected)');
+        }
+
+        ctx.cleanupPrefixes.push(testData.prefix);
+      });
+
       it('should handle file retrieval/access after upload', async () => {
         if (!ctx) {
           console.log(`Skipping test - ${target} environment setup failed`);

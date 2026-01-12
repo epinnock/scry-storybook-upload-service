@@ -45,6 +45,7 @@ R2_BUCKET_NAME = "my-storybooks-production"
 # - FIREBASE_PROJECT_ID
 # - FIREBASE_CLIENT_EMAIL
 # - FIREBASE_PRIVATE_KEY
+# - SENTRY_DSN (Sentry Data Source Name for error tracking)
 #
 # DO NOT add placeholder values here - they will override secrets!
 

@@ -136,31 +136,53 @@ export class FirestoreServiceWorker implements FirestoreService {
   }
 
   /**
-   * Finds a build by its version ID
+   * Finds a build by its version ID.
+   *
+   * Note: We intentionally avoid `orderBy(buildNumber)` here to prevent requiring
+   * a composite index (Firestore will throw FAILED_PRECONDITION without one).
+   *
+   * If multiple builds exist for the same version (should be rare), we select
+   * the build with the highest `buildNumber` client-side.
+   *
+   * Concurrency caveat: if you run multiple deployments simultaneously for the
+   * same (projectId, versionId), this selection may attach coverage to the
+   * newest build for that version. If you need strict run-level association,
+   * prefer passing/using an explicit buildId when attaching coverage.
    */
   async getBuildByVersion(
     projectId: string,
     versionId: string
   ): Promise<Build | null> {
     const token = await this.getAccessToken();
-    
+
     const structuredQuery = {
       from: [{ collectionId: 'builds' }],
       where: {
         fieldFilter: {
           field: { fieldPath: 'versionId' },
           op: 'EQUAL',
-          value: { stringValue: versionId }
-        }
+          value: { stringValue: versionId },
+        },
       },
-      limit: 1
+      // No orderBy here to avoid composite index requirement
+      limit: 50,
     };
 
     const docs = await this.queryDocuments(`projects/${projectId}`, structuredQuery, token);
     if (docs.length === 0) return null;
-    
-    const id = docs[0].name.split('/').pop()!;
-    return this.convertDocToBuild(id, docs[0].fields);
+
+    // Choose the latest build by buildNumber
+    let bestDoc = docs[0];
+    for (const doc of docs) {
+      const current = this.convertDocToBuild(doc.name.split('/').pop()!, doc.fields);
+      const best = this.convertDocToBuild(bestDoc.name.split('/').pop()!, bestDoc.fields);
+      if ((current.buildNumber ?? 0) > (best.buildNumber ?? 0)) {
+        bestDoc = doc;
+      }
+    }
+
+    const id = bestDoc.name.split('/').pop()!;
+    return this.convertDocToBuild(id, bestDoc.fields);
   }
 
   /**

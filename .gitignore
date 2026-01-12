@@ -11,7 +11,8 @@
 .env
 .env*.local
 .dev.vars
-
+.env.prod
+.env.stage
 # Credentials and secrets (NEVER commit these!)
 .r2.secrets
 *.secrets
@@ -19,6 +20,7 @@
 serviceAccount.json
 serviceAccount*.json
 **/serviceAccount.json
+sentry.secret
 
 # Wrangler local development directory
 .wrangler/

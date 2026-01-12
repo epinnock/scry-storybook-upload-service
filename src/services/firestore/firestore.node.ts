@@ -110,23 +110,43 @@ export class FirestoreServiceNode implements FirestoreService {
   }
 
   /**
-   * Finds a build by its version ID
+   * Finds a build by its version ID.
+   *
+   * Note: We intentionally avoid `orderBy(buildNumber)` here to prevent requiring
+   * a composite index (Firestore will throw FAILED_PRECONDITION without one).
+   *
+   * If multiple builds exist for the same version (should be rare), we select
+   * the build with the highest `buildNumber` client-side.
+   *
+   * Concurrency caveat: if you run multiple deployments simultaneously for the
+   * same (projectId, versionId), this selection may attach coverage to the
+   * newest build for that version. If you need strict run-level association,
+   * prefer passing/using an explicit buildId when attaching coverage.
    */
   async getBuildByVersion(
     projectId: string,
     versionId: string
   ): Promise<Build | null> {
-    const snapshot = await this.db.collection(`projects/${projectId}/builds`)
+    const snapshot = await this.db
+      .collection(`projects/${projectId}/builds`)
       .where('versionId', '==', versionId)
-      .limit(1)
       .get();
 
     if (snapshot.empty) {
       return null;
     }
 
-    const doc = snapshot.docs[0];
-    return this.convertDocToBuild(doc.id, doc.data());
+    // Choose the latest build by buildNumber
+    let bestDoc = snapshot.docs[0];
+    for (const doc of snapshot.docs) {
+      const current = doc.data() as any;
+      const best = bestDoc.data() as any;
+      if ((current?.buildNumber ?? 0) > (best?.buildNumber ?? 0)) {
+        bestDoc = doc;
+      }
+    }
+
+    return this.convertDocToBuild(bestDoc.id, bestDoc.data());
   }
 
   /**

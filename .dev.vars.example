@@ -15,3 +15,11 @@ FIREBASE_PROJECT_ID=your-project-id
 FIREBASE_CLIENT_EMAIL=service-account@your-project.iam.gserviceaccount.com
 FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
 FIRESTORE_SERVICE_ACCOUNT_ID=upload-service
+
+# Sentry Error Tracking Configuration
+# Get your DSN from: https://sentry.io/settings/projects/{project}/keys/
+SENTRY_DSN=https://your-public-key@o0.ingest.sentry.io/0
+# Optional: Override environment detection (defaults to NODE_ENV or 'production')
+SENTRY_ENVIRONMENT=development
+# Optional: Set release version for source map association
+# SENTRY_RELEASE=storybook-upload-service@1.0.0

@@ -625,11 +625,13 @@ app.openapi(presignedUrlRoute, async (c) => {
 
   const data = await storage.getPresignedUploadUrl(key, contentType);
 
-  // Create Firestore build record if Firestore is configured
+  // Only create Firestore build record for ZIP files (primary build artifact)
+  // Coverage and other supplementary files should not create new builds
+  const isZipFile = filename.toLowerCase().endsWith('.zip');
   let buildId: string | undefined;
   let buildNumber: number | undefined;
   
-  if (firestore) {
+  if (firestore && isZipFile) {
     try {
       // Construct the URL that will be available after upload
       const zipUrl = data.url.split('?')[0]; // Remove query parameters to get the base URL

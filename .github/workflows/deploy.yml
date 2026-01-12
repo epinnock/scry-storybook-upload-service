@@ -8,6 +8,10 @@ on:
       - main
   workflow_dispatch: # Allows manual triggering
 
+env:
+  # Sentry release version - uses git SHA for unique identification
+  SENTRY_RELEASE: storybook-upload-service@${{ github.sha }}
+
 jobs:
   deploy-worker:
     runs-on: ubuntu-latest
@@ -43,6 +47,23 @@ jobs:
           # The 'command' defaults to 'deploy', which is what is needed here.
           # It will automatically use the wrangler.toml file from the repository root.
 
+      # Upload source maps to Sentry for better error stack traces
+      - name: Create Sentry Release and Upload Source Maps
+        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
+        uses: getsentry/action-release@v3
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+        with:
+          environment: production
+          version: ${{ env.SENTRY_RELEASE }}
+          sourcemaps: './dist'
+          # Set commits to associate with this release
+          set_commits: auto
+          # Finalize the release after upload
+          finalize: true
+
       - name: Validate Deployment with E2E Tests
         run: pnpm run validate:deployment
         env:
@@ -51,6 +72,15 @@ jobs:
           R2_S3_SECRET_ACCESS_KEY: ${{ secrets.R2_S3_SECRET_ACCESS_KEY }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+
+      # Notify Sentry of successful deployment
+      - name: Notify Sentry of Deployment
+        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' && success() }}
+        run: |
+          curl -sL https://sentry.io/api/0/organizations/${{ secrets.SENTRY_ORG }}/releases/${{ env.SENTRY_RELEASE }}/deploys/ \
+            -H "Authorization: Bearer ${{ secrets.SENTRY_AUTH_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"environment": "production"}' || true
 
 
   build-and-push-docker:

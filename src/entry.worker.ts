@@ -1,5 +1,6 @@
 // In src/entry.worker.ts
 
+import * as Sentry from '@sentry/cloudflare';
 import { Hono } from 'hono';
 import { app } from './app';
 import { R2S3StorageService } from './services/storage/storage.worker';
@@ -28,6 +29,11 @@ type Bindings = {
   FIREBASE_CLIENT_EMAIL?: string;
   FIREBASE_PRIVATE_KEY?: string;
   FIRESTORE_SERVICE_ACCOUNT_ID?: string;
+  
+  // Sentry configuration
+  SENTRY_DSN?: string;
+  SENTRY_ENVIRONMENT?: string;
+  SENTRY_RELEASE?: string;
   
   // Environment variable to detect test mode
   NODE_ENV?: string;
@@ -120,9 +126,60 @@ workerApp.use('*', async (c, next) => {
 workerApp.route('/', app);
 
 /**
+ * The base handler that processes requests through the Hono app.
+ * This is wrapped by Sentry for error tracking and performance monitoring.
+ */
+const handler: ExportedHandler<Bindings> = {
+  async fetch(request: Request, env: Bindings, ctx: ExecutionContext): Promise<Response> {
+    return workerApp.fetch(request, env, ctx);
+  },
+};
+
+/**
  * Export the final object that conforms to the Cloudflare Module Worker standard.
  * The runtime will invoke the 'fetch' method for each incoming HTTP request.
+ * 
+ * Wrapped with Sentry's withSentry for:
+ * - Automatic error capturing and reporting
+ * - Performance monitoring and tracing
+ * - Request context enrichment
+ * - Proper use of ctx.waitUntil for async event delivery
  */
-export default {
-  fetch: workerApp.fetch,
-};
+export default Sentry.withSentry(
+  (env: Bindings) => ({
+    dsn: env.SENTRY_DSN,
+    // Environment helps distinguish between production, staging, development
+    environment: env.SENTRY_ENVIRONMENT || env.NODE_ENV || 'production',
+    // Release version for tracking deployments and source maps
+    release: env.SENTRY_RELEASE,
+    // Capture 100% of errors
+    // For high-traffic workers, consider lowering this in production
+    tracesSampleRate: env.NODE_ENV === 'production' ? 0.1 : 1.0,
+    // Enable debug mode in non-production environments
+    debug: env.NODE_ENV !== 'production',
+    // Attach request data to events for better debugging
+    sendDefaultPii: false,
+    // Configure which errors to ignore
+    ignoreErrors: [
+      // Ignore common non-actionable errors
+      'AbortError',
+      'Network request failed',
+    ],
+    // Add custom tags to all events
+    initialScope: {
+      tags: {
+        service: 'storybook-upload-service',
+        runtime: 'cloudflare-workers',
+      },
+    },
+    // Before sending an event, you can modify or drop it
+    beforeSend(event, hint) {
+      // Don't send events in test mode
+      if (env.NODE_ENV === 'test') {
+        return null;
+      }
+      return event;
+    },
+  }),
+  handler as ExportedHandler
+);
