@@ -8,10 +8,10 @@ on:
   workflow_dispatch: # Allow manual triggering
 
 jobs:
-  # Job 1: Quick validation (unit tests + build)
+  # Job 1: Quick validation (unit tests + build + coverage)
   validate:
     runs-on: ubuntu-latest
-    name: Unit Tests & Build
+    name: Unit Tests, Coverage & Build
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -29,8 +29,24 @@ jobs:
       - name: Install Dependencies
         run: pnpm install --no-frozen-lockfile
 
-      - name: Run Unit Tests
-        run: pnpm run test
+      - name: Run Unit Tests with Coverage
+        run: pnpm run test:coverage
+
+      - name: Upload Coverage Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
+
+      - name: Coverage Summary
+        run: |
+          echo "## Coverage Summary" >> $GITHUB_STEP_SUMMARY
+          if [ -f coverage/coverage-summary.json ]; then
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            cat coverage/coverage-summary.json >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Build Project
         run: pnpm run build

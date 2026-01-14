@@ -51,5 +51,46 @@ export default defineConfig({
     
     // Better logging for debugging
     logHeapUsage: true,
+    
+    // Coverage configuration
+    coverage: {
+      // Enable coverage collection
+      enabled: false, // Enable via CLI with --coverage flag
+      
+      // Coverage provider (v8 is faster, istanbul has more features)
+      provider: 'v8',
+      
+      // Output directory for coverage reports
+      reportsDirectory: './coverage',
+      
+      // Report formats
+      reporter: ['text', 'text-summary', 'json', 'json-summary', 'html', 'lcov'],
+      
+      // Files to include in coverage
+      include: ['src/**/*.ts'],
+      
+      // Files to exclude from coverage
+      exclude: [
+        'src/**/*.test.ts',
+        'src/**/*.spec.ts',
+        'src/**/*.d.ts',
+        'src/entry.*.ts', // Entry points are thin wrappers
+        '**/node_modules/**',
+      ],
+      
+      // Coverage thresholds (fail if below these values)
+      thresholds: {
+        statements: 70,
+        branches: 60,
+        functions: 70,
+        lines: 70,
+      },
+      
+      // Clean coverage results before running tests
+      clean: true,
+      
+      // Skip full coverage report if thresholds are met
+      skipFull: false,
+    },
   },
 });

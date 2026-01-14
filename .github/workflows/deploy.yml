@@ -13,9 +13,10 @@ env:
   SENTRY_RELEASE: storybook-upload-service@${{ github.sha }}
 
 jobs:
-  deploy-worker:
+  # Job 1: Run tests with coverage before deployment
+  test-and-coverage:
     runs-on: ubuntu-latest
-    name: Deploy to Cloudflare Workers
+    name: Tests & Coverage Report
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -33,11 +34,65 @@ jobs:
       - name: Install Dependencies
         run: pnpm install --no-frozen-lockfile
 
-      - name: Run Unit Tests
-        run: pnpm run test
+      - name: Run Unit Tests with Coverage
+        run: pnpm run test:coverage
 
-      - name: Build
+      - name: Upload Coverage Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 30
+
+      - name: Coverage Summary
+        run: |
+          echo "## 📊 Coverage Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f coverage/coverage-summary.json ]; then
+            # Extract coverage percentages using jq or simple parsing
+            echo "### Summary" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat coverage/coverage-summary.json | head -50 >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Build Project
         run: pnpm run build
+
+      - name: Cache Build Artifacts
+        uses: actions/cache@v4
+        with:
+          path: dist/
+          key: build-${{ github.sha }}
+          retention-days: 1
+
+  # Job 2: Deploy to Cloudflare Workers
+  deploy-worker:
+    runs-on: ubuntu-latest
+    name: Deploy to Cloudflare Workers
+    needs: test-and-coverage
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install Dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Restore Build Cache
+        uses: actions/cache@v4
+        with:
+          path: dist/
+          key: build-${{ github.sha }}
 
       - name: Deploy Worker
         uses: cloudflare/wrangler-action@v3
@@ -82,10 +137,20 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{"environment": "production"}' || true
 
+      - name: Deployment Summary
+        if: success()
+        run: |
+          echo "## 🚀 Deployment Successful" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Worker:** storybook-deployment-service" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** Production" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
 
+  # Job 3: Build and Push Docker Image
   build-and-push-docker:
     runs-on: ubuntu-latest
     name: Build and Push Docker Image
+    needs: test-and-coverage
     # Grant permissions for the GITHUB_TOKEN to push to the GitHub Container Registry.
     permissions:
       contents: read
@@ -106,7 +171,9 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/${{ github.repository }}:latest
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
           # Pass build arguments for any secrets needed during the build process (if any).
           # secrets: |
           #   "NPM_TOKEN=${{ secrets.NPM_TOKEN }}"

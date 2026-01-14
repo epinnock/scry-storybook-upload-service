@@ -7,6 +7,7 @@
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:e2e:clean": "npm run cleanup:ports && npm run test:e2e",
     "cleanup:ports": "lsof -ti:3000,3001,3002,3003,3004,3005,3006,3007,3008,3009,3010,8787 | xargs kill -9 2>/dev/null || true",
@@ -14,6 +15,7 @@
     "dev:node": "npm run build && DOTENV_CONFIG_PATH=.env.local npm run start:node",
     "dev:worker": "wrangler dev",
     "deploy:worker": "wrangler deploy",
+    "deploy:preview": "wrangler deploy --env preview",
     "e2e:setup": "npm install && npm run build",
     "e2e:node": "E2E_TARGET=node vitest run e2e",
     "e2e:worker": "concurrently \"npm run dev:worker\" \"wait-on http://localhost:8787 && vitest run e2e --env worker\"",
@@ -51,11 +53,13 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250913.0",
     "@types/node": "^24.4.0",
+    "@vitest/coverage-v8": "^3.2.4",
     "concurrently": "^9.1.2",
     "jest-mock": "^30.0.5",
     "supertest": "^7.0.0",
     "typescript": "^5.9.2",
     "vitest": "^3.2.4",
-    "wait-on": "^8.0.1"
+    "wait-on": "^8.0.1",
+    "wrangler": "^4.22.0"
   }
 }
