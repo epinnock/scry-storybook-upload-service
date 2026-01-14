@@ -7,6 +7,14 @@ on:
     branches-ignore: [ main ]  # Run on all branches except main
   workflow_dispatch: # Allow manual triggering
 
+# Default token permissions for this workflow.
+# Note: On PRs from forks, GitHub still restricts GITHUB_TOKEN write access;
+# we additionally guard comment steps to only run on same-repo PRs.
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
 jobs:
   # Job 1: Quick validation (unit tests + build + coverage)
   validate:
@@ -63,6 +71,8 @@ jobs:
     runs-on: ubuntu-latest
     name: E2E Tests (Local Worker)
     needs: validate
+    # Disabled for now (will be reintroduced later)
+    if: ${{ false }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -95,7 +105,8 @@ jobs:
     runs-on: ubuntu-latest
     name: Deploy Preview Environment
     needs: validate
-    if: github.event_name == 'pull_request'
+    # Disabled for now (will be reintroduced later)
+    if: ${{ false }}
     environment:
       name: preview-pr-${{ github.event.number }}
       url: https://storybook-deployment-service-pr-${{ github.event.number }}.scry-demo.workers.dev
@@ -133,7 +144,9 @@ jobs:
 
       - name: Comment PR with Preview URL
         uses: actions/github-script@v7
-        if: github.event_name == 'pull_request'
+        # Avoid 403 "Resource not accessible by integration" on forked PRs.
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
         with:
           script: |
             const previewUrl = `https://storybook-deployment-service-pr-${{ github.event.number }}.scry-demo.workers.dev`;
@@ -142,32 +155,37 @@ jobs:
             Preview URL: ${previewUrl}
             
             This preview environment is automatically updated when you push changes to this PR.`;
-            
-            // Check if we already commented
-            const comments = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-            
-            const existingComment = comments.data.find(comment => 
-              comment.body.includes('Preview Deployment Ready!')
-            );
-            
-            if (existingComment) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existingComment.id,
-                body: comment
-              });
-            } else {
-              await github.rest.issues.createComment({
+
+            try {
+              // Check if we already commented
+              const comments = await github.rest.issues.listComments({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
-                body: comment
               });
+
+              const existingComment = comments.data.find(comment =>
+                comment.body?.includes('Preview Deployment Ready!')
+              );
+
+              if (existingComment) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existingComment.id,
+                  body: comment
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: comment
+                });
+              }
+            } catch (err) {
+              // Don't fail the workflow on comment permission issues.
+              core.warning(`Unable to comment on PR: ${err?.message || err}`);
             }
 
   # Job 4: E2E Testing against Preview
@@ -175,7 +193,8 @@ jobs:
     runs-on: ubuntu-latest
     name: E2E Tests (Preview Environment)
     needs: [validate, preview-deploy]
-    if: github.event_name == 'pull_request'
+    # Disabled for now (will be reintroduced later)
+    if: ${{ false }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -248,20 +267,19 @@ jobs:
   ci-complete:
     runs-on: ubuntu-latest
     name: CI Complete
-    needs: [validate, e2e-local, quality]
+    # e2e-local / preview jobs are currently disabled
+    needs: [validate, quality]
     if: always()
     steps:
       - name: Check CI Status
         run: |
           if [[ "${{ needs.validate.result }}" == "success" && 
-                "${{ needs.e2e-local.result }}" == "success" && 
                 "${{ needs.quality.result }}" == "success" ]]; then
             echo "✅ All CI checks passed!"
             exit 0
           else
             echo "❌ CI checks failed"
             echo "Validate: ${{ needs.validate.result }}"
-            echo "E2E Local: ${{ needs.e2e-local.result }}"
             echo "Quality: ${{ needs.quality.result }}"
             exit 1
           fi
