@@ -84,8 +84,11 @@ nodeApp.use('*', async (c, next) => {
     : new R2S3StorageService(config.r2);
   c.set('storage', storageService);
   
-  // Initialize Firestore and API Key services if Firebase is configured
-  if (admin.apps.length > 0) {
+  // Initialize Firestore and API Key services if Firebase is configured.
+  //
+  // In test mode we intentionally skip Firebase initialization to avoid requiring
+  // real API keys / Firestore credentials for local/e2e runs.
+  if (!isTestMode && admin.apps.length > 0) {
     const serviceAccountId = process.env.FIRESTORE_SERVICE_ACCOUNT_ID || 'upload-service';
     const firestoreService = new FirestoreServiceNode(serviceAccountId);
     c.set('firestore', firestoreService);

@@ -8,6 +8,7 @@ This project provides a backend service for uploading and managing Storybook bui
 - **Presigned URL Generation**: Generate secure, short-lived URLs for client-side uploads
 - **API Key Authentication**: Secure project-scoped API key authentication via Firebase
 - **Build Tracking**: Automatically track builds in Firestore with version history
+- **Coverage Uploads**: Upload a coverage report JSON alongside a Storybook build (or separately) and store normalized coverage data on the Firestore build document
 - **Auto-incrementing Build Numbers**: Each project gets sequential build numbers
 - **Multi-environment Support**: Run on Node.js, Docker, or Cloudflare Workers
 
@@ -508,6 +509,20 @@ Health check endpoint (no authentication required).
 
 Uploads a zipped Storybook build directly to the service.
 
+#### Optional Coverage (multipart only)
+
+You can include a coverage report JSON file in the same multipart request as the Storybook ZIP.
+
+- Multipart field names:
+  - `file`: the Storybook ZIP (required)
+  - `coverage`: a JSON file (optional)
+  - `coverageJson`: a JSON string field (optional, alternative to `coverage`)
+
+When provided, the service uploads the raw JSON to object storage at:
+`{project}/{version}/coverage-report.json`
+
+…and returns `data.coverageUrl`. If Firestore is configured, the service also stores a normalized coverage summary under `build.coverage`.
+
 ⚠️ **Requires `X-API-Key` header**
 
 -   **URL Params**:
@@ -528,10 +543,25 @@ Uploads a zipped Storybook build directly to the service.
         "path": "my-project/v1.0.0/storybook.zip",
         "versionId": "...",
         "buildId": "abc123def456",
-        "buildNumber": 1
+        "buildNumber": 1,
+        "coverageUrl": "https://.../my-project/v1.0.0/coverage-report.json"
       }
     }
     ```
+
+### `POST /upload/:project/:version/coverage` 🔒
+
+Uploads a coverage report for an existing build (found by `project` + `version`).
+
+- Accepts either:
+  - `Content-Type: application/json` (JSON body)
+  - `multipart/form-data` with `file=@coverage-report.json`
+
+On success:
+- raw JSON is uploaded to object storage at `{project}/{version}/coverage-report.json`
+- Firestore build document is updated at `build.coverage` (normalized summary + qualityGate)
+
+**Note**: This endpoint requires Firestore to be configured.
 
 ### `POST /presigned-url/:project/:version/:filename` 🔒
 
