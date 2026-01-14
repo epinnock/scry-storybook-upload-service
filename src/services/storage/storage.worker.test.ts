@@ -12,6 +12,8 @@ vi.mock('@aws-sdk/s3-request-presigner');
 // Mock the R2Bucket
 const mockR2Bucket = {
   put: vi.fn(),
+  list: vi.fn(),
+  delete: vi.fn(),
 };
 
 describe('R2S3StorageService (Worker)', () => {
@@ -71,5 +73,28 @@ describe('R2S3StorageService (Worker)', () => {
       url: mockSignedUrl,
       key: key,
     });
+  });
+
+  it('deleteByPrefix() lists and deletes objects until cursor is exhausted', async () => {
+    const storageService = new R2S3StorageService(mockR2Bucket as any, config);
+
+    mockR2Bucket.list
+      .mockResolvedValueOnce({
+        objects: [{ key: 'pfx/a' }, { key: 'pfx/b' }],
+        truncated: true,
+        cursor: 'c1',
+      })
+      .mockResolvedValueOnce({
+        objects: [{ key: 'pfx/c' }],
+        truncated: false,
+        cursor: 'c2',
+      });
+
+    await storageService.deleteByPrefix('pfx/');
+
+    expect(mockR2Bucket.list).toHaveBeenCalledWith({ prefix: 'pfx/', cursor: undefined });
+    expect(mockR2Bucket.list).toHaveBeenCalledWith({ prefix: 'pfx/', cursor: 'c1' });
+    expect(mockR2Bucket.delete).toHaveBeenCalledWith(['pfx/a', 'pfx/b']);
+    expect(mockR2Bucket.delete).toHaveBeenCalledWith(['pfx/c']);
   });
 });
