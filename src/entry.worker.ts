@@ -61,6 +61,7 @@ workerApp.use('*', async (c, next) => {
     const accessKeyId = c.env.R2_S3_ACCESS_KEY_ID;
     const secretAccessKey = c.env.R2_S3_SECRET_ACCESS_KEY;
     const accountId = c.env.R2_ACCOUNT_ID;
+    const bucketName = c.env.R2_BUCKET_NAME;
     
     // R2 access key IDs should be exactly 32 characters
     if (accessKeyId && accessKeyId.length !== 32) {
@@ -76,16 +77,26 @@ workerApp.use('*', async (c, next) => {
       hasAccessKeyId: !!accessKeyId,
       accessKeyIdLength: accessKeyId?.length,
       hasSecretAccessKey: !!secretAccessKey,
-      hasBucketName: !!c.env.R2_BUCKET_NAME,
-      hasBucketBinding: !!c.env.STORYBOOK_BUCKET
+      hasBucketName: !!bucketName,
+      hasBucketBinding: !!c.env.STORYBOOK_BUCKET,
     });
+
+    if (!accountId || !bucketName || !accessKeyId || !secretAccessKey) {
+      console.error('[CONFIG ERROR] Missing required R2 configuration for presigned URLs.', {
+        hasAccountId: !!accountId,
+        hasBucketName: !!bucketName,
+        hasAccessKeyId: !!accessKeyId,
+        hasSecretAccessKey: !!secretAccessKey,
+      });
+      throw new Error('Missing required R2 configuration. Ensure R2_ACCOUNT_ID, R2_BUCKET_NAME, R2_S3_ACCESS_KEY_ID, and R2_S3_SECRET_ACCESS_KEY are set.');
+    }
     
     // Assemble the configuration for the S3 client from environment variables.
     const r2Config = {
       accountId: accountId,
       accessKeyId: accessKeyId,
       secretAccessKey: secretAccessKey,
-      bucketName: c.env.R2_BUCKET_NAME,
+      bucketName: bucketName,
     };
 
     // Instantiate the hybrid storage service with both the native binding and the S3 config.

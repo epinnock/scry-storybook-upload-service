@@ -359,7 +359,10 @@ export class ApiKeyServiceWorker implements ApiKeyService {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to get access token: ${response.statusText}`);
+      const errorText = await response.text();
+      throw new Error(
+        `Failed to get access token: ${response.status} ${response.statusText} ${errorText}`
+      );
     }
 
     const data = await response.json() as { access_token: string; expires_in: number };
@@ -398,7 +401,11 @@ export class ApiKeyServiceWorker implements ApiKeyService {
    */
   private async signJWT(data: string, privateKey: string): Promise<string> {
     // Handle both literal \n and actual newlines in the private key
-    const cleanedKey = privateKey.replace(/\\n/g, '\n');
+    const trimmedKey = privateKey.trim();
+    const unquotedKey = trimmedKey
+      .replace(/^"(.*)"$/, '$1')
+      .replace(/^'(.*)'$/, '$1');
+    const cleanedKey = unquotedKey.replace(/\\n/g, '\n');
     
     const pemHeader = '-----BEGIN PRIVATE KEY-----';
     const pemFooter = '-----END PRIVATE KEY-----';

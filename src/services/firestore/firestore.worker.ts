@@ -31,11 +31,19 @@ export class FirestoreServiceWorker implements FirestoreService {
     projectId: string,
     data: CreateBuildData
   ): Promise<Build> {
+    console.log('[FIRESTORE] createBuild start', {
+      firestoreProjectId: this.config.projectId,
+      projectId,
+      versionId: data.versionId,
+      zipUrl: data.zipUrl,
+      hasCoverage: Boolean(data.coverage),
+    });
     const token = await this.getAccessToken();
     
     // Get current build number
     const counterPath = `projects/${projectId}/counters/builds`;
     let buildNumber = 1;
+    console.log('[FIRESTORE] createBuild counter path', { counterPath });
     
     try {
       const counterDoc = await this.getDocument(counterPath, token);
@@ -47,6 +55,10 @@ export class FirestoreServiceWorker implements FirestoreService {
     }
 
     // Update counter
+    console.log('[FIRESTORE] createBuild update counter', {
+      counterPath,
+      buildNumber,
+    });
     await this.setDocument(counterPath, {
       currentBuildNumber: { integerValue: buildNumber.toString() }
     }, token);
@@ -55,6 +67,10 @@ export class FirestoreServiceWorker implements FirestoreService {
     const buildId = this.generateId();
     const buildPath = `projects/${projectId}/builds/${buildId}`;
     const now = new Date();
+    console.log('[FIRESTORE] createBuild build path', {
+      buildPath,
+      buildId,
+    });
     
     const buildDoc = {
       projectId: { stringValue: projectId },
@@ -67,7 +83,17 @@ export class FirestoreServiceWorker implements FirestoreService {
       ...(data.coverage ? { coverage: this.toFirestoreValue(data.coverage) } : {}),
     };
 
+    console.log('[FIRESTORE] createBuild writing build doc', {
+      buildPath,
+      versionId: data.versionId,
+      buildNumber,
+    });
     await this.setDocument(buildPath, buildDoc, token);
+    console.log('[FIRESTORE] createBuild build doc written', {
+      buildPath,
+      buildId,
+      buildNumber,
+    });
 
     return {
       id: buildId,
@@ -153,7 +179,22 @@ export class FirestoreServiceWorker implements FirestoreService {
     projectId: string,
     versionId: string
   ): Promise<Build | null> {
+    console.log('[FIRESTORE] getBuildByVersion start', {
+      firestoreProjectId: this.config.projectId,
+      projectId,
+      versionId,
+    });
+
+    console.log('[FIRESTORE] getBuildByVersion requesting access token', {
+      projectId,
+      versionId,
+    });
     const token = await this.getAccessToken();
+    console.log('[FIRESTORE] getBuildByVersion access token acquired', {
+      projectId,
+      versionId,
+      hasToken: Boolean(token),
+    });
 
     const structuredQuery = {
       from: [{ collectionId: 'builds' }],
@@ -168,14 +209,60 @@ export class FirestoreServiceWorker implements FirestoreService {
       limit: 50,
     };
 
-    const docs = await this.queryDocuments(`projects/${projectId}`, structuredQuery, token);
-    if (docs.length === 0) return null;
+    console.log('[FIRESTORE] getBuildByVersion structuredQuery', {
+      projectId,
+      versionId,
+      structuredQuery,
+    });
+
+    const parentPath = `projects/${projectId}`;
+    console.log('[FIRESTORE] getBuildByVersion running query', {
+      projectId,
+      versionId,
+      parentPath,
+    });
+    const docs = await this.queryDocuments(parentPath, structuredQuery, token);
+    console.log('[FIRESTORE] getBuildByVersion results', {
+      firestoreProjectId: this.config.projectId,
+      projectId,
+      versionId,
+      count: docs.length,
+      docIds: docs.slice(0, 5).map((doc) => doc.name.split('/').pop()),
+      docVersionIds: docs.slice(0, 5).map((doc) => doc.fields?.versionId?.stringValue),
+    });
+    if (docs.length === 0) {
+      const fallbackQuery = {
+        from: [{ collectionId: 'builds' }],
+        limit: 5,
+      };
+      console.log('[FIRESTORE] getBuildByVersion fallback query (no filter)', {
+        projectId,
+        versionId,
+        fallbackQuery,
+      });
+      const fallbackDocs = await this.queryDocuments(parentPath, fallbackQuery, token);
+      console.log('[FIRESTORE] getBuildByVersion fallback results', {
+        projectId,
+        versionId,
+        count: fallbackDocs.length,
+        docIds: fallbackDocs.map((doc) => doc.name.split('/').pop()),
+        docVersionIds: fallbackDocs.map((doc) => doc.fields?.versionId?.stringValue),
+      });
+      return null;
+    }
 
     // Choose the latest build by buildNumber
     let bestDoc = docs[0];
     for (const doc of docs) {
       const current = this.convertDocToBuild(doc.name.split('/').pop()!, doc.fields);
       const best = this.convertDocToBuild(bestDoc.name.split('/').pop()!, bestDoc.fields);
+      console.log('[FIRESTORE] getBuildByVersion candidate', {
+        currentId: current.id,
+        currentBuildNumber: current.buildNumber,
+        currentVersionId: current.versionId,
+        bestId: best.id,
+        bestBuildNumber: best.buildNumber,
+      });
       if ((current.buildNumber ?? 0) > (best.buildNumber ?? 0)) {
         bestDoc = doc;
       }
@@ -422,7 +509,15 @@ export class FirestoreServiceWorker implements FirestoreService {
   }
 
   private async queryDocuments(parent: string, structuredQuery: any, token: string): Promise<any[]> {
-    const url = `${this.baseUrl}:runQuery`;
+    const parentName = `projects/${this.config.projectId}/databases/(default)/documents/${parent}`;
+    console.log('[FIRESTORE] queryDocuments start', {
+      firestoreProjectId: this.config.projectId,
+      parent,
+      parentName,
+      structuredQuery,
+    });
+    // Use the parent path in the URL for subcollection queries
+    const url = `${this.baseUrl}/${parent}:runQuery`;
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -430,7 +525,6 @@ export class FirestoreServiceWorker implements FirestoreService {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        parent: `${this.baseUrl}/${parent}`,
         structuredQuery
       })
     });
@@ -440,6 +534,12 @@ export class FirestoreServiceWorker implements FirestoreService {
     }
 
     const results = await response.json() as any[];
+    console.log('[FIRESTORE] queryDocuments results', {
+      firestoreProjectId: this.config.projectId,
+      parent,
+      parentName,
+      count: results.filter((r: any) => r.document).length,
+    });
     return results.filter((r: any) => r.document).map((r: any) => r.document);
   }
 
@@ -463,8 +563,17 @@ export class FirestoreServiceWorker implements FirestoreService {
    * Generate access token using service account credentials
    */
   private async getAccessToken(): Promise<string> {
+    console.log('[FIRESTORE] getAccessToken start', {
+      hasCachedToken: Boolean(this.accessToken),
+      tokenExpiry: this.tokenExpiry,
+      now: Date.now(),
+    });
     // Check if we have a valid cached token
     if (this.accessToken && Date.now() < this.tokenExpiry) {
+      console.log('[FIRESTORE] getAccessToken using cached token', {
+        tokenExpiry: this.tokenExpiry,
+        now: Date.now(),
+      });
       return this.accessToken;
     }
 
@@ -484,10 +593,16 @@ export class FirestoreServiceWorker implements FirestoreService {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to get access token: ${response.statusText}`);
+      const errorText = await response.text();
+      throw new Error(
+        `Failed to get access token: ${response.status} ${response.statusText} ${errorText}`
+      );
     }
 
     const data = await response.json() as { access_token: string; expires_in: number };
+    console.log('[FIRESTORE] getAccessToken fetched new token', {
+      expiresIn: data.expires_in,
+    });
     this.accessToken = data.access_token;
     this.tokenExpiry = Date.now() + (data.expires_in - 60) * 1000; // Refresh 1 minute before expiry
 
@@ -524,7 +639,11 @@ export class FirestoreServiceWorker implements FirestoreService {
   private async signJWT(data: string, privateKey: string): Promise<string> {
     // Import private key
     // Handle both literal \n and actual newlines in the private key
-    const cleanedKey = privateKey.replace(/\\n/g, '\n');
+    const trimmedKey = privateKey.trim();
+    const unquotedKey = trimmedKey
+      .replace(/^"(.*)"$/, '$1')
+      .replace(/^'(.*)'$/, '$1');
+    const cleanedKey = unquotedKey.replace(/\\n/g, '\n');
     
     const pemHeader = '-----BEGIN PRIVATE KEY-----';
     const pemFooter = '-----END PRIVATE KEY-----';
