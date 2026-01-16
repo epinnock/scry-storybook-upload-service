@@ -173,6 +173,7 @@ app.openapi(uploadRoute, async (c) => {
     const storage = c.var.storage;
     const firestore = c.var.firestore;
     const { project, version } = c.req.valid('param');
+    console.log(`[INFO] Upload request received: project=${project}, version=${version}`);
 
     // Validate project and version
     if (!project || project.trim() === '') {
@@ -203,6 +204,7 @@ app.openapi(uploadRoute, async (c) => {
     let coverageUrl: string | undefined;
 
     const contentType = c.req.header('content-type') || '';
+    console.log(`[INFO] Upload content-type: ${contentType || 'unknown'}`);
 
     if (contentType.includes('multipart/form-data')) {
       // Handle multipart form data
@@ -307,6 +309,8 @@ app.openapi(uploadRoute, async (c) => {
       }
     }
 
+    console.log(`[INFO] Upload parsed: fileSize=${file.size}, hasCoverage=${Boolean(coveragePayload)}`);
+
     // Check file size limit (5MB)
     if (file.size > maxSize) {
       return c.json({ error: 'File too large. Maximum size is 5MB' }, 413);
@@ -316,6 +320,7 @@ app.openapi(uploadRoute, async (c) => {
     const body = file.stream();
 
     const result = await storage.upload(key, body, fileContentType);
+    console.log(`[INFO] Upload stored: key=${key}, url=${result.url}`);
 
     // Create Firestore build record if Firestore is configured
     let buildId: string | undefined;
@@ -335,9 +340,11 @@ app.openapi(uploadRoute, async (c) => {
             : {}),
         };
 
+        console.log(`[INFO] Creating build: project=${project}, version=${version}, zipUrl=${result.url}, hasCoverage=${Boolean(buildData.coverage)}`);
         const build = await firestore.createBuild(project, buildData);
         buildId = build.id;
         buildNumber = build.buildNumber;
+        console.log(`[INFO] Build created: id=${buildId}, number=${buildNumber}`);
       } catch (firestoreError) {
         // Log error but don't fail the upload
         console.error('Firestore error (upload succeeded):', firestoreError);
@@ -429,61 +436,102 @@ app.openapi(coverageUploadRoute, async (c) => {
     const storage = c.var.storage;
     const firestore = c.var.firestore;
     const { project, version } = c.req.valid('param');
+    const requestId = c.req.header('cf-ray') || 'unknown';
+    const contentTypeHeader = c.req.header('content-type') || '';
+
+    console.log('[COVERAGE] Request received', {
+      requestId,
+      project,
+      version,
+      contentType: contentTypeHeader,
+      hasFirestore: !!firestore,
+    });
 
     if (!firestore) {
+      console.error('[COVERAGE] Firestore not configured', { requestId });
       return c.json({ error: 'Firestore not configured' }, 500);
     }
 
     // Find the build for this version
+    console.log('[COVERAGE] Looking up build', { requestId, project, version });
     const build = await firestore.getBuildByVersion(project, version);
     if (!build) {
+      console.warn('[COVERAGE] Build not found', { requestId, project, version });
       return c.json({ error: 'Build not found for this version' }, 404);
     }
+    console.log('[COVERAGE] Build found', { requestId, buildId: build.id, buildNumber: build.buildNumber });
 
     // Handle both JSON body and multipart form data
-    const contentType = c.req.header('content-type') || '';
+    const contentType = contentTypeHeader;
     let coveragePayload: unknown;
 
     if (contentType.includes('multipart/form-data')) {
       // Handle multipart - coverage JSON file upload
       try {
+        console.log('[COVERAGE] Parsing multipart form data (Hono)', { requestId });
         const formData = await c.req.formData();
         const file = (formData.get('file') as File | null) || (formData.get('coverage') as File | null);
 
         if (!file) {
+          console.warn('[COVERAGE] No coverage file provided in multipart', { requestId });
           return c.json({ error: 'No coverage file provided' }, 400);
         }
 
         const fileContent = await file.text();
+        console.log('[COVERAGE] Multipart file parsed', {
+          requestId,
+          filename: file.name,
+          size: file.size,
+          type: file.type,
+        });
         coveragePayload = JSON.parse(fileContent);
       } catch (e) {
         // Fallback to busboy parser for Node.js compatibility
         try {
+          console.log('[COVERAGE] Multipart parse failed, trying busboy fallback', { requestId });
           const parsed = await parseMultipartFormData(c.req.raw);
           const file = parsed.files.file || parsed.files.coverage;
 
           if (!file) {
+            console.warn('[COVERAGE] No coverage file provided in busboy', { requestId });
             return c.json({ error: 'No coverage file provided' }, 400);
           }
 
           const fileContent = await file.text();
+          console.log('[COVERAGE] Busboy file parsed', {
+            requestId,
+            filename: file.name,
+            size: file.size,
+            type: file.type,
+          });
           coveragePayload = JSON.parse(fileContent);
         } catch {
+          console.error('[COVERAGE] Invalid coverage JSON after multipart parsing', { requestId });
           return c.json({ error: 'Invalid coverage JSON' }, 400);
         }
       }
     } else {
       try {
+        console.log('[COVERAGE] Parsing JSON body', { requestId });
         coveragePayload = await c.req.json();
       } catch {
+        console.error('[COVERAGE] Invalid JSON body', { requestId });
         return c.json({ error: 'Invalid coverage JSON' }, 400);
       }
     }
 
+    console.log('[COVERAGE] Coverage payload received', {
+      requestId,
+      payloadType: typeof coveragePayload,
+      payloadKeys: coveragePayload && typeof coveragePayload === 'object' ? Object.keys(coveragePayload as Record<string, unknown>) : [],
+    });
+
     // Always upload raw JSON to R2
     const coverageKey = `${project}/${version}/coverage-report.json`;
     const coverageBody = new Blob([JSON.stringify(coveragePayload)]).stream();
+    console.log('[COVERAGE] Uploading coverage JSON to storage', { requestId, coverageKey });
     const coverageResult = await storage.upload(coverageKey, coverageBody, 'application/json');
+    console.log('[COVERAGE] Coverage JSON uploaded', { requestId, coverageUrl: coverageResult.url });
 
     let coverage: BuildCoverage;
     try {
@@ -491,11 +539,17 @@ app.openapi(coverageUploadRoute, async (c) => {
         reportUrl: coverageResult.url,
       }) as BuildCoverage;
     } catch (e) {
+      console.error('[COVERAGE] Coverage normalization failed', {
+        requestId,
+        error: e instanceof Error ? e.message : String(e),
+      });
       return c.json({ error: 'Invalid coverage data' }, 400);
     }
 
     // Update build with coverage data
+    console.log('[COVERAGE] Updating build coverage', { requestId, buildId: build.id });
     await firestore.updateBuildCoverage(project, build.id, coverage);
+    console.log('[COVERAGE] Build coverage updated', { requestId, buildId: build.id });
 
     return c.json(
       {
@@ -621,6 +675,8 @@ app.openapi(presignedUrlRoute, async (c) => {
     // If no JSON body, use default content type
   }
 
+  console.log(`[INFO] Presigned URL request: project=${project}, version=${version}, filename=${filename}, contentType=${contentType}`);
+
   const key = `${project}/${version}/${filename}`;
 
   const data = await storage.getPresignedUploadUrl(key, contentType);
@@ -628,6 +684,7 @@ app.openapi(presignedUrlRoute, async (c) => {
   // Only create Firestore build record for ZIP files (primary build artifact)
   // Coverage and other supplementary files should not create new builds
   const isZipFile = filename.toLowerCase().endsWith('.zip');
+  console.log(`[INFO] Presigned URL build tracking: firestore=${Boolean(firestore)}, isZip=${isZipFile}`);
   let buildId: string | undefined;
   let buildNumber: number | undefined;
   
@@ -636,6 +693,7 @@ app.openapi(presignedUrlRoute, async (c) => {
       // Construct the URL that will be available after upload
       const zipUrl = data.url.split('?')[0]; // Remove query parameters to get the base URL
       
+      console.log(`[INFO] Creating build for presigned upload: project=${project}, version=${version}, zipUrl=${zipUrl}`);
       const build = await firestore.createBuild(project, {
         versionId: version,
         zipUrl: zipUrl
