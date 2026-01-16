@@ -59,7 +59,7 @@ describe('ApiKeyServiceWorker (coverage)', () => {
   });
 
   it('getAccessToken() throws when token exchange fails', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: false, statusText: 'nope' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 400, statusText: 'nope', text: async () => 'error body' });
     globalThis.fetch = fetchMock;
 
     const svc = new ApiKeyServiceWorker(config);

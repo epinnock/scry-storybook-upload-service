@@ -107,7 +107,7 @@ describe('FirestoreServiceWorker (branch coverage)', () => {
     (svc as any).accessToken = null;
     (svc as any).tokenExpiry = 0;
     (svc as any).createJWT = vi.fn().mockResolvedValue('jwt');
-    globalThis.fetch = vi.fn().mockResolvedValueOnce({ ok: false, statusText: 'nope' });
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({ ok: false, status: 400, statusText: 'nope', text: async () => 'error body' });
     await expect((svc as any).getAccessToken()).rejects.toThrow('Failed to get access token');
   });
 });
