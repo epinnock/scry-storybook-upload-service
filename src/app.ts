@@ -21,6 +21,7 @@ export type AppEnv = {
     storage: StorageService;
     firestore?: FirestoreService; // Optional to support gradual rollout
     apiKeyService?: ApiKeyService; // Optional for API key authentication
+    processingQueue?: Queue; // Optional build processing queue
   } & AuthVariables;
 };
 
@@ -345,6 +346,24 @@ app.openapi(uploadRoute, async (c) => {
         buildId = build.id;
         buildNumber = build.buildNumber;
         console.log(`[INFO] Build created: id=${buildId}, number=${buildNumber}`);
+
+        // Enqueue build for async processing (LLM inspection, embeddings, vector DB)
+        const processingQueue = c.get('processingQueue');
+        if (processingQueue && buildId) {
+          try {
+            await processingQueue.send({
+              projectId: project,
+              versionId: version,
+              buildId,
+              zipKey: key,
+              timestamp: Date.now(),
+            });
+            console.log(`[INFO] Build queued for processing: buildId=${buildId}`);
+          } catch (queueError) {
+            // Log error but don't fail the upload
+            console.error('Queue error (upload succeeded):', queueError);
+          }
+        }
       } catch (firestoreError) {
         // Log error but don't fail the upload
         console.error('Firestore error (upload succeeded):', firestoreError);

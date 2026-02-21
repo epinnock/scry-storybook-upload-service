@@ -23,18 +23,21 @@ type Bindings = {
   R2_S3_ACCESS_KEY_ID: string;
   R2_S3_SECRET_ACCESS_KEY: string;
   R2_BUCKET_NAME: string;
-  
+
   // Firebase/Firestore configuration
   FIREBASE_PROJECT_ID?: string;
   FIREBASE_CLIENT_EMAIL?: string;
   FIREBASE_PRIVATE_KEY?: string;
   FIRESTORE_SERVICE_ACCOUNT_ID?: string;
-  
+
   // Sentry configuration
   SENTRY_DSN?: string;
   SENTRY_ENVIRONMENT?: string;
   SENTRY_RELEASE?: string;
-  
+
+  // Build processing queue
+  BUILD_PROCESSING_QUEUE?: Queue;
+
   // Environment variable to detect test mode
   NODE_ENV?: string;
 };
@@ -128,6 +131,11 @@ workerApp.use('*', async (c, next) => {
     };
     const apiKeyService = new ApiKeyServiceWorker(apiKeyConfig);
     c.set('apiKeyService', apiKeyService);
+  }
+
+  // Inject processing queue if available
+  if (c.env.BUILD_PROCESSING_QUEUE) {
+    c.set('processingQueue', c.env.BUILD_PROCESSING_QUEUE);
   }
 
   await next();

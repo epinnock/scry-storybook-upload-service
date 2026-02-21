@@ -60,6 +60,10 @@ bucket_name = "my-storybooks-staging"
 preview_bucket_name = "my-storybooks-staging"
 
 # Observability and Logging Configuration
+[[queues.producers]]
+queue = "scry-build-processing"
+binding = "BUILD_PROCESSING_QUEUE"
+
 [observability]
 [observability.logs]
 enabled = true  # Enable logging
