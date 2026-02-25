@@ -37,7 +37,6 @@ type Bindings = {
 
   // Build processing queue
   BUILD_PROCESSING_QUEUE?: Queue;
-
   // Environment variable to detect test mode
   NODE_ENV?: string;
 };

@@ -1,7 +1,14 @@
 import admin from 'firebase-admin';
 import type { Firestore, FieldValue } from 'firebase-admin/firestore';
 import type { FirestoreService } from './firestore.service.js';
-import type { Build, BuildCoverage, CreateBuildData, UpdateBuildData, BuildStatus } from './firestore.types.js';
+import type {
+  Build,
+  BuildCoverage,
+  BuildProcessingStatus,
+  BuildStatus,
+  CreateBuildData,
+  UpdateBuildData,
+} from './firestore.types.js';
 
 /**
  * Node.js implementation of FirestoreService using Firebase Admin SDK
@@ -153,8 +160,13 @@ export class FirestoreServiceNode implements FirestoreService {
    * Gets the latest active build for a project
    */
   async getLatestBuild(
-    projectId: string
+    projectId: string,
+    versionId?: string
   ): Promise<Build | null> {
+    if (versionId) {
+      return this.getBuildByVersion(projectId, versionId);
+    }
+
     const snapshot = await this.db.collection(`projects/${projectId}/builds`)
       .where('status', '==', 'active')
       .orderBy('buildNumber', 'desc')
@@ -191,6 +203,18 @@ export class FirestoreServiceNode implements FirestoreService {
   ): Promise<void> {
     const buildRef = this.db.doc(`projects/${projectId}/builds/${buildId}`);
     await buildRef.update({ coverage } as any);
+  }
+
+  /**
+   * Updates metadata processing status for a build.
+   */
+  async updateProcessingStatus(
+    projectId: string,
+    buildId: string,
+    status: BuildProcessingStatus
+  ): Promise<void> {
+    const buildRef = this.db.doc(`projects/${projectId}/builds/${buildId}`);
+    await buildRef.update({ processingStatus: status } as any);
   }
 
   /**
@@ -236,6 +260,7 @@ export class FirestoreServiceNode implements FirestoreService {
       archivedAt: data.archivedAt?.toDate?.(),
       archivedBy: data.archivedBy,
       coverage: data.coverage,
+      processingStatus: data.processingStatus,
     };
   }
 }

@@ -8,7 +8,11 @@ import { swaggerUI } from '@hono/swagger-ui';
 import { logger } from 'hono/logger';
 import type { StorageService } from './services/storage/storage.service.js';
 import type { FirestoreService } from './services/firestore/firestore.service.js';
-import type { BuildCoverage, CreateBuildData } from './services/firestore/firestore.types.js';
+import type {
+  BuildCoverage,
+  BuildProcessingStatus,
+  CreateBuildData,
+} from './services/firestore/firestore.types.js';
 import type { ApiKeyService } from './services/apikey/apikey.service.js';
 import { apiKeyAuth, type AuthVariables } from './middleware/auth.js';
 import { normalizeCoverageInput } from './coverage/coverage.js';
@@ -399,6 +403,14 @@ const CoverageUploadResponseSchema = z.object({
   coverageUrl: z.string().optional(),
 });
 
+const MetadataUploadResponseSchema = z.object({
+  success: z.boolean(),
+  message: z.string(),
+  queued: z.boolean(),
+  buildNumber: z.number(),
+  zipKey: z.string(),
+});
+
 // Coverage upload route - upload JSON and update build
 const coverageUploadRoute = createRoute({
   method: 'post',
@@ -585,6 +597,115 @@ app.openapi(coverageUploadRoute, async (c) => {
       {
         error: `Coverage upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
       },
+      500
+    );
+  }
+});
+
+const metadataUploadRoute = createRoute({
+  method: 'post',
+  path: '/upload/:project/:version/metadata',
+  request: {
+    params: ProjectVersionParamsSchema,
+  },
+  responses: {
+    201: {
+      description: 'Metadata ZIP uploaded',
+      content: {
+        'application/json': {
+          schema: MetadataUploadResponseSchema,
+        },
+      },
+    },
+    400: {
+      description: 'Invalid request payload or missing prior build',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema,
+        },
+      },
+    },
+    401: {
+      description: 'Unauthorized',
+      content: {
+        'application/json': {
+          schema: AuthErrorResponseSchema,
+        },
+      },
+    },
+    500: {
+      description: 'Internal server error',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema,
+        },
+      },
+    },
+  },
+});
+
+app.openapi(metadataUploadRoute, async (c) => {
+  try {
+    const { project, version } = c.req.valid('param');
+    const storage = c.var.storage;
+    const firestore = c.var.firestore;
+    const queue = c.var.processingQueue;
+
+    const body = await c.req.arrayBuffer();
+    if (!body || body.byteLength === 0) {
+      return c.json({ error: 'No file provided' }, 400);
+    }
+
+    if (!firestore) {
+      return c.json({ error: 'Firestore not configured' }, 500);
+    }
+
+    const build = await firestore.getLatestBuild(project, version);
+    if (!build) {
+      return c.json(
+        {
+          error: 'No build found for this project and version. Upload storybook.zip first.',
+        },
+        400
+      );
+    }
+
+    const zipKey = `${project}/${version}/builds/${build.buildNumber}/metadata-screenshots.zip`;
+    await storage.upload(zipKey, new Blob([body]).stream(), 'application/zip');
+
+    let queued = false;
+    if (queue) {
+      await queue.send({
+        projectId: project,
+        versionId: version,
+        buildId: build.id,
+        zipKey,
+        timestamp: Date.now(),
+      });
+      queued = true;
+    }
+
+    const queuedStatus: BuildProcessingStatus = 'queued';
+    if (firestore.updateProcessingStatus) {
+      await firestore.updateProcessingStatus(project, build.id, queuedStatus);
+    } else {
+      await firestore.updateBuild(project, build.id, { processingStatus: queuedStatus });
+    }
+
+    return c.json(
+      {
+        success: true,
+        message: queued ? 'Metadata ZIP uploaded and processing queued' : 'Metadata ZIP uploaded',
+        queued,
+        buildNumber: build.buildNumber,
+        zipKey,
+      },
+      201
+    );
+  } catch (error) {
+    console.error('Metadata upload error:', error);
+    return c.json(
+      { error: `Metadata upload failed: ${error instanceof Error ? error.message : 'Unknown error'}` },
       500
     );
   }
