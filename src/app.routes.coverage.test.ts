@@ -8,11 +8,13 @@ import type { FirestoreService } from './services/firestore/firestore.service.js
 function createTestServer(options: {
   storage: StorageService;
   firestore?: FirestoreService;
+  cleanupToken?: string;
 }) {
   const wrapper = new Hono<AppEnv>();
   wrapper.use('*', async (c, next) => {
     c.set('storage', options.storage);
     if (options.firestore) c.set('firestore', options.firestore);
+    if (options.cleanupToken) c.set('cleanupToken', options.cleanupToken);
     await next();
   });
   wrapper.route('/', app);
@@ -55,21 +57,24 @@ describe('app routes (coverage)', () => {
     expect(body.key).toBe('my-proj/v1/storybook.zip');
   });
 
-  it('DELETE /cleanup/:project/:version requires X-Test-Cleanup=true', async () => {
+  it('DELETE /cleanup/:project/:version requires configured X-Cleanup-Token', async () => {
     const deleteByPrefix = vi.fn(async () => undefined);
     const storage: StorageService = {
       upload: vi.fn() as any,
       getPresignedUploadUrl: vi.fn() as any,
       deleteByPrefix: deleteByPrefix as any,
     };
-    const server = createTestServer({ storage });
+    const disabledServer = createTestServer({ storage });
+    const disabledRes = await disabledServer.request('/cleanup/my-proj/v1', { method: 'DELETE' });
+    expect(disabledRes.status).toBe(404);
 
+    const server = createTestServer({ storage, cleanupToken: 'cleanup-secret' });
     const res1 = await server.request('/cleanup/my-proj/v1', { method: 'DELETE' });
     expect(res1.status).toBe(401);
 
     const res2 = await server.request('/cleanup/my-proj/v1', {
       method: 'DELETE',
-      headers: { 'X-Test-Cleanup': 'true' },
+      headers: { 'X-Cleanup-Token': 'cleanup-secret' },
     });
     expect(res2.status).toBe(200);
     expect(deleteByPrefix).toHaveBeenCalledWith('my-proj/v1/');
@@ -291,6 +296,22 @@ describe('app routes (coverage)', () => {
     expect(body.buildId).toBeUndefined();
     expect(body.buildNumber).toBeUndefined();
     expect(firestore.createBuild).not.toHaveBeenCalled();
+  });
+
+  it('POST /presigned-url/:project/:version/:filename rejects unsafe filename segments', async () => {
+    const storage: StorageService = {
+      upload: vi.fn() as any,
+      getPresignedUploadUrl: vi.fn() as any,
+      deleteByPrefix: vi.fn() as any,
+    };
+    const server = createTestServer({ storage });
+
+    const res = await server.request('/presigned-url/my-proj/v1/%24bad.zip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contentType: 'application/zip' }),
+    });
+    expect(res.status).toBe(400);
   });
 
   it('POST /upload/:project/:version/coverage returns 500 if Firestore is not configured', async () => {

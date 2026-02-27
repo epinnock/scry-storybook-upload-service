@@ -26,6 +26,7 @@ export type AppEnv = {
     firestore?: FirestoreService; // Optional to support gradual rollout
     apiKeyService?: ApiKeyService; // Optional for API key authentication
     processingQueue?: Queue; // Optional build processing queue
+    cleanupToken?: string;
   } & AuthVariables;
 };
 
@@ -39,21 +40,59 @@ app.use('*', logger());
 app.use('/upload/*', apiKeyAuth());
 app.use('/presigned-url/*', apiKeyAuth());
 
+const PROJECT_SEGMENT_REGEX = /^[a-zA-Z0-9_-]+$/;
+const VERSION_SEGMENT_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
+const FILENAME_SEGMENT_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
+
 // Define Zod schemas for parameters and responses
 const ProjectVersionParamsSchema = z.object({
-  project: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/, 'Project name must contain only alphanumeric characters, hyphens, and underscores').openapi({ example: 'my-project' }),
-  version: z.string().min(1).openapi({ 
-    example: 'v1.0.0',
-    description: 'Version identifier - supports semantic versions (v1.0.0), PR builds (pr-001), extended versions (v0.0.0.1), and named releases (beta-2024, dev-123, staging, latest)',
-    examples: ['v1.0.0', 'pr-001', 'v0.0.0.1', 'beta-2024', 'dev-snapshot-123', 'staging', 'latest', 'main']
-  })
+  project: z.string().min(1).regex(PROJECT_SEGMENT_REGEX, 'Project name must contain only alphanumeric characters, hyphens, and underscores').openapi({ example: 'my-project' }),
+  version: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(
+      VERSION_SEGMENT_REGEX,
+      'Version must contain only alphanumeric characters, periods, hyphens, and underscores'
+    )
+    .openapi({
+      example: 'v1.0.0',
+      description:
+        'Version identifier - supports semantic versions (v1.0.0), PR builds (pr-001), extended versions (v0.0.0.1), and named releases (beta-2024, dev-123, staging, latest)',
+      examples: ['v1.0.0', 'pr-001', 'v0.0.0.1', 'beta-2024', 'dev-snapshot-123', 'staging', 'latest', 'main'],
+    }),
 });
 
 const ProjectVersionFilenameParamsSchema = z.object({
-  project: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/, 'Project name must contain only alphanumeric characters, hyphens, and underscores').openapi({ example: 'my-project' }),
-  version: z.string().min(1).openapi({ example: '1.0.0' }),
-  filename: z.string().openapi({ example: 'storybook.zip' })
+  project: z.string().min(1).regex(PROJECT_SEGMENT_REGEX, 'Project name must contain only alphanumeric characters, hyphens, and underscores').openapi({ example: 'my-project' }),
+  version: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(
+      VERSION_SEGMENT_REGEX,
+      'Version must contain only alphanumeric characters, periods, hyphens, and underscores'
+    )
+    .openapi({ example: '1.0.0' }),
+  filename: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(
+      FILENAME_SEGMENT_REGEX,
+      'Filename must contain only alphanumeric characters, periods, hyphens, and underscores'
+    )
+    .openapi({ example: 'storybook.zip' }),
 });
+
+function constantTimeEquals(left: string, right: string): boolean {
+  if (left.length !== right.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < left.length; i += 1) {
+    mismatch |= left.charCodeAt(i) ^ right.charCodeAt(i);
+  }
+  return mismatch === 0;
+}
 
 const UploadResponseSchema = z.object({
   success: z.boolean(),
@@ -882,13 +921,26 @@ const cleanupRoute = createRoute({
           schema: ErrorResponseSchema
         }
       }
+    },
+    404: {
+      description: 'Cleanup endpoint disabled',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema
+        }
+      }
     }
   }
 });
 
 app.openapi(cleanupRoute, async (c) => {
-  const cleanupHeader = c.req.header('X-Test-Cleanup');
-  if (cleanupHeader !== 'true') {
+  const configuredCleanupToken = c.var.cleanupToken;
+  if (!configuredCleanupToken) {
+    return c.json({ error: 'Cleanup endpoint is disabled' }, 404);
+  }
+
+  const cleanupHeader = c.req.header('X-Cleanup-Token') || '';
+  if (!constantTimeEquals(cleanupHeader, configuredCleanupToken)) {
     return c.json({ error: 'Unauthorized cleanup request' }, 401);
   }
 

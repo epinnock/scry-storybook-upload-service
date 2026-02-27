@@ -39,6 +39,9 @@ type Bindings = {
   BUILD_PROCESSING_QUEUE?: Queue;
   // Environment variable to detect test mode
   NODE_ENV?: string;
+
+  // Shared secret used to authorize cleanup requests.
+  CLEANUP_TOKEN?: string;
 };
 
 // Create a new Hono instance specifically for the Worker, extending the shared AppEnv.
@@ -135,6 +138,9 @@ workerApp.use('*', async (c, next) => {
   // Inject processing queue if available
   if (c.env.BUILD_PROCESSING_QUEUE) {
     c.set('processingQueue', c.env.BUILD_PROCESSING_QUEUE);
+  }
+  if (c.env.CLEANUP_TOKEN) {
+    c.set('cleanupToken', c.env.CLEANUP_TOKEN);
   }
 
   await next();

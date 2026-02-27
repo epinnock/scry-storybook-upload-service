@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { app, type AppEnv } from './app.js';
 import type { ApiKeyService } from './services/apikey/apikey.service.js';
 import type { FirestoreService } from './services/firestore/firestore.service.js';
+import type { Build } from './services/firestore/firestore.types.js';
 import type { StorageService } from './services/storage/storage.service.js';
 
 function createTestServer(options: {
@@ -15,7 +16,7 @@ function createTestServer(options: {
   wrapper.use('*', async (c, next) => {
     c.set('storage', options.storage);
     if (options.firestore) c.set('firestore', options.firestore);
-    if (options.queue) c.set('queue', options.queue as unknown as Queue);
+    if (options.queue) c.set('processingQueue', options.queue as unknown as Queue);
     if (options.apiKeyService) c.set('apiKeyService', options.apiKeyService);
     await next();
   });
@@ -24,19 +25,22 @@ function createTestServer(options: {
 }
 
 function createFirestoreMock(overrides: Partial<FirestoreService> = {}): FirestoreService {
-  return {
-    createBuild: vi.fn() as any,
-    getBuild: vi.fn() as any,
-    getProjectBuilds: vi.fn() as any,
-    getBuildByVersion: vi.fn() as any,
-    getLatestBuild: vi.fn() as any,
-    updateBuild: vi.fn() as any,
-    updateBuildCoverage: vi.fn() as any,
-    updateProcessingStatus: vi.fn() as any,
-    archiveBuild: vi.fn() as any,
-    deleteBuild: vi.fn() as any,
-    ...overrides,
+  const base: FirestoreService = {
+    createBuild: vi.fn(async () => {
+      throw new Error('createBuild was not mocked for this test');
+    }),
+    getBuild: vi.fn(async () => null),
+    getProjectBuilds: vi.fn(async () => []),
+    getBuildByVersion: vi.fn(async () => null),
+    getLatestBuild: vi.fn(async () => null),
+    updateBuild: vi.fn(async () => undefined),
+    updateBuildCoverage: vi.fn(async () => undefined),
+    updateProcessingStatus: vi.fn(async () => undefined),
+    archiveBuild: vi.fn(async () => undefined),
+    deleteBuild: vi.fn(async () => undefined),
   };
+
+  return { ...base, ...overrides };
 }
 
 describe('app metadata route', () => {
@@ -53,8 +57,7 @@ describe('app metadata route', () => {
       deleteByPrefix: vi.fn() as any,
     };
 
-    const firestore = createFirestoreMock({
-      getLatestBuild: vi.fn(async () => ({
+    const latestBuild: Build = {
         id: 'build-123',
         projectId: 'my-project',
         versionId: 'v1.0.0',
@@ -63,8 +66,10 @@ describe('app metadata route', () => {
         status: 'active',
         createdAt: new Date(),
         createdBy: 'test',
-      })) as any,
-      updateProcessingStatus: vi.fn(async () => undefined) as any,
+    };
+    const firestore = createFirestoreMock({
+      getLatestBuild: vi.fn(async () => latestBuild),
+      updateProcessingStatus: vi.fn(async () => undefined),
     });
 
     const server = createTestServer({
@@ -101,6 +106,23 @@ describe('app metadata route', () => {
     expect(body.buildNumber).toBe(7);
   });
 
+  it('returns 400 when version parameter contains unsafe characters', async () => {
+    const storage: StorageService = {
+      upload: vi.fn() as any,
+      getPresignedUploadUrl: vi.fn() as any,
+      deleteByPrefix: vi.fn() as any,
+    };
+    const firestore = createFirestoreMock();
+    const server = createTestServer({ storage, firestore });
+
+    const res = await server.request('/upload/my-project/%24bad/metadata', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/zip' },
+      body: new Uint8Array([80, 75, 3, 4]),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it('returns 400 when metadata ZIP body is empty', async () => {
     const storage: StorageService = {
       upload: vi.fn() as any,
@@ -128,7 +150,7 @@ describe('app metadata route', () => {
       deleteByPrefix: vi.fn() as any,
     };
     const firestore = createFirestoreMock({
-      getLatestBuild: vi.fn(async () => null) as any,
+      getLatestBuild: vi.fn(async () => null),
     });
     const server = createTestServer({ storage, firestore });
 
@@ -150,8 +172,7 @@ describe('app metadata route', () => {
       getPresignedUploadUrl: vi.fn() as any,
       deleteByPrefix: vi.fn() as any,
     };
-    const firestore = createFirestoreMock({
-      getLatestBuild: vi.fn(async () => ({
+    const latestBuild: Build = {
         id: 'build-123',
         projectId: 'my-project',
         versionId: 'v1.0.0',
@@ -160,8 +181,10 @@ describe('app metadata route', () => {
         status: 'active',
         createdAt: new Date(),
         createdBy: 'test',
-      })) as any,
-      updateProcessingStatus: vi.fn(async () => undefined) as any,
+    };
+    const firestore = createFirestoreMock({
+      getLatestBuild: vi.fn(async () => latestBuild),
+      updateProcessingStatus: vi.fn(async () => undefined),
     });
     const server = createTestServer({ storage, firestore });
 

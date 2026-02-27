@@ -18,11 +18,15 @@ export class WorkerAdapter implements TestAdapter {
     // Kill any existing processes on the port
     await this.killExistingProcess(port);
 
-    // Set test environment variables for wrangler
+    // Set test environment variables for wrangler CLI process
     const env = { ...process.env, ...config.envVars };
+    const varArgs: string[] = [];
+    for (const [key, value] of Object.entries(config.envVars || {})) {
+      varArgs.push('--var', `${key}:${value}`);
+    }
 
-    // Spawn wrangler dev
-    this.devProcess = spawn('npx', ['wrangler', 'dev', '--port', port.toString(), '--var', 'NODE_ENV:test'], {
+    // Spawn wrangler dev with explicit Worker vars for the runtime
+    this.devProcess = spawn('npx', ['wrangler', 'dev', '--port', port.toString(), ...varArgs], {
       stdio: 'pipe',
       env,
       cwd: process.cwd(),
