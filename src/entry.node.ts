@@ -97,6 +97,9 @@ nodeApp.use('*', async (c, next) => {
     const apiKeyService = new ApiKeyServiceNode();
     c.set('apiKeyService', apiKeyService);
   }
+  if (process.env.CLEANUP_TOKEN) {
+    c.set('cleanupToken', process.env.CLEANUP_TOKEN);
+  }
   
   await next();
 });

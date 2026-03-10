@@ -25,6 +25,7 @@ export const defaultConfig: Record<DeploymentTarget, Partial<E2EConfig>> = {
     port: 3001,
     envVars: {
       NODE_ENV: 'test',
+      CLEANUP_TOKEN: 'e2e-cleanup-token',
     },
   },
   worker: {
@@ -32,6 +33,7 @@ export const defaultConfig: Record<DeploymentTarget, Partial<E2EConfig>> = {
     port: 8787,
     envVars: {
       NODE_ENV: 'test',
+      CLEANUP_TOKEN: 'e2e-cleanup-token',
     },
   },
   docker: {
@@ -39,6 +41,7 @@ export const defaultConfig: Record<DeploymentTarget, Partial<E2EConfig>> = {
     port: 3000,
     envVars: {
       NODE_ENV: 'test',
+      CLEANUP_TOKEN: 'e2e-cleanup-token',
     },
   },
   production: {

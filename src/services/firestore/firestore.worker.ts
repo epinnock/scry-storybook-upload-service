@@ -1,5 +1,12 @@
 import type { FirestoreService } from './firestore.service.js';
-import type { Build, BuildCoverage, CreateBuildData, UpdateBuildData, BuildStatus } from './firestore.types.js';
+import type {
+  Build,
+  BuildCoverage,
+  BuildProcessingStatus,
+  BuildStatus,
+  CreateBuildData,
+  UpdateBuildData,
+} from './firestore.types.js';
 
 interface FirestoreConfig {
   projectId: string;
@@ -276,8 +283,13 @@ export class FirestoreServiceWorker implements FirestoreService {
    * Gets the latest active build for a project
    */
   async getLatestBuild(
-    projectId: string
+    projectId: string,
+    versionId?: string
   ): Promise<Build | null> {
+    if (versionId) {
+      return this.getBuildByVersion(projectId, versionId);
+    }
+
     const token = await this.getAccessToken();
     
     const structuredQuery = {
@@ -317,6 +329,7 @@ export class FirestoreServiceWorker implements FirestoreService {
     if (updates.archivedAt) fields.archivedAt = { timestampValue: updates.archivedAt.toISOString() };
     if (updates.archivedBy) fields.archivedBy = { stringValue: updates.archivedBy };
     if (updates.coverage) fields.coverage = this.toFirestoreValue(updates.coverage);
+    if (updates.processingStatus) fields.processingStatus = { stringValue: updates.processingStatus };
 
     await this.patchDocument(buildPath, fields, token);
   }
@@ -353,6 +366,19 @@ export class FirestoreServiceWorker implements FirestoreService {
     const buildPath = `projects/${projectId}/builds/${buildId}`;
 
     await this.patchDocument(buildPath, { coverage: this.toFirestoreValue(coverage) }, token);
+  }
+
+  /**
+   * Updates metadata processing status for a build.
+   */
+  async updateProcessingStatus(
+    projectId: string,
+    buildId: string,
+    status: BuildProcessingStatus
+  ): Promise<void> {
+    const token = await this.getAccessToken();
+    const buildPath = `projects/${projectId}/builds/${buildId}`;
+    await this.patchDocument(buildPath, { processingStatus: { stringValue: status } }, token);
   }
 
   /**
@@ -556,6 +582,7 @@ export class FirestoreServiceWorker implements FirestoreService {
       archivedAt: fields.archivedAt?.timestampValue ? new Date(fields.archivedAt.timestampValue) : undefined,
       archivedBy: fields.archivedBy?.stringValue,
       coverage: fields.coverage ? (this.fromFirestoreValue(fields.coverage) as any) : undefined,
+      processingStatus: fields.processingStatus?.stringValue,
     };
   }
 

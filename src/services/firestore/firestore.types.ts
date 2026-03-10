@@ -2,6 +2,7 @@
  * Represents the status of a build in the system
  */
 export type BuildStatus = 'active' | 'archived';
+export type BuildProcessingStatus = 'queued' | 'processing' | 'completed' | 'partial' | 'failed';
 
 /**
  * Summary metrics extracted from a coverage report.
@@ -119,6 +120,11 @@ export interface Build {
    * Normalized coverage data for the build (if uploaded).
    */
   coverage?: BuildCoverage;
+
+  /**
+   * Async processing state for screenshot metadata ingestion.
+   */
+  processingStatus?: BuildProcessingStatus;
 }
 
 /**
@@ -169,4 +175,9 @@ export interface UpdateBuildData {
    * Normalized coverage data for the build (if uploaded).
    */
   coverage?: BuildCoverage;
+
+  /**
+   * Async processing state for screenshot metadata ingestion.
+   */
+  processingStatus?: BuildProcessingStatus;
 }

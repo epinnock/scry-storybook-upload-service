@@ -67,9 +67,19 @@ export async function cleanupTestEnv(context: TestContext | undefined): Promise<
     return;
   }
 
+  const cleanupToken =
+    context.config.envVars?.CLEANUP_TOKEN || process.env.CLEANUP_TOKEN;
+
+  if (!cleanupToken) {
+    console.warn('Cleanup token not configured; skipping API cleanup requests');
+  }
+
   // Clean up storage data via API BEFORE terminating the server
   // This ensures the server is still running when we make cleanup API calls
   for (const prefix of context.cleanupPrefixes || []) {
+    if (!cleanupToken) {
+      break;
+    }
     try {
       // Parse prefix correctly: "project/version/" -> ["project", "version"]
       const trimmedPrefix = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
@@ -82,7 +92,7 @@ export async function cleanupTestEnv(context: TestContext | undefined): Promise<
         const response = await context.client(`/cleanup/${project}/${version}`, {
           method: 'DELETE',
           headers: {
-            'X-Test-Cleanup': 'true',
+            'X-Cleanup-Token': cleanupToken,
           },
         });
 

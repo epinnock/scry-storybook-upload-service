@@ -8,7 +8,11 @@ import { swaggerUI } from '@hono/swagger-ui';
 import { logger } from 'hono/logger';
 import type { StorageService } from './services/storage/storage.service.js';
 import type { FirestoreService } from './services/firestore/firestore.service.js';
-import type { BuildCoverage, CreateBuildData } from './services/firestore/firestore.types.js';
+import type {
+  BuildCoverage,
+  BuildProcessingStatus,
+  CreateBuildData,
+} from './services/firestore/firestore.types.js';
 import type { ApiKeyService } from './services/apikey/apikey.service.js';
 import { apiKeyAuth, type AuthVariables } from './middleware/auth.js';
 import { normalizeCoverageInput } from './coverage/coverage.js';
@@ -22,6 +26,7 @@ export type AppEnv = {
     firestore?: FirestoreService; // Optional to support gradual rollout
     apiKeyService?: ApiKeyService; // Optional for API key authentication
     processingQueue?: Queue; // Optional build processing queue
+    cleanupToken?: string;
   } & AuthVariables;
 };
 
@@ -35,21 +40,59 @@ app.use('*', logger());
 app.use('/upload/*', apiKeyAuth());
 app.use('/presigned-url/*', apiKeyAuth());
 
+const PROJECT_SEGMENT_REGEX = /^[a-zA-Z0-9_-]+$/;
+const VERSION_SEGMENT_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
+const FILENAME_SEGMENT_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
+
 // Define Zod schemas for parameters and responses
 const ProjectVersionParamsSchema = z.object({
-  project: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/, 'Project name must contain only alphanumeric characters, hyphens, and underscores').openapi({ example: 'my-project' }),
-  version: z.string().min(1).openapi({ 
-    example: 'v1.0.0',
-    description: 'Version identifier - supports semantic versions (v1.0.0), PR builds (pr-001), extended versions (v0.0.0.1), and named releases (beta-2024, dev-123, staging, latest)',
-    examples: ['v1.0.0', 'pr-001', 'v0.0.0.1', 'beta-2024', 'dev-snapshot-123', 'staging', 'latest', 'main']
-  })
+  project: z.string().min(1).regex(PROJECT_SEGMENT_REGEX, 'Project name must contain only alphanumeric characters, hyphens, and underscores').openapi({ example: 'my-project' }),
+  version: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(
+      VERSION_SEGMENT_REGEX,
+      'Version must contain only alphanumeric characters, periods, hyphens, and underscores'
+    )
+    .openapi({
+      example: 'v1.0.0',
+      description:
+        'Version identifier - supports semantic versions (v1.0.0), PR builds (pr-001), extended versions (v0.0.0.1), and named releases (beta-2024, dev-123, staging, latest)',
+      examples: ['v1.0.0', 'pr-001', 'v0.0.0.1', 'beta-2024', 'dev-snapshot-123', 'staging', 'latest', 'main'],
+    }),
 });
 
 const ProjectVersionFilenameParamsSchema = z.object({
-  project: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/, 'Project name must contain only alphanumeric characters, hyphens, and underscores').openapi({ example: 'my-project' }),
-  version: z.string().min(1).openapi({ example: '1.0.0' }),
-  filename: z.string().openapi({ example: 'storybook.zip' })
+  project: z.string().min(1).regex(PROJECT_SEGMENT_REGEX, 'Project name must contain only alphanumeric characters, hyphens, and underscores').openapi({ example: 'my-project' }),
+  version: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(
+      VERSION_SEGMENT_REGEX,
+      'Version must contain only alphanumeric characters, periods, hyphens, and underscores'
+    )
+    .openapi({ example: '1.0.0' }),
+  filename: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(
+      FILENAME_SEGMENT_REGEX,
+      'Filename must contain only alphanumeric characters, periods, hyphens, and underscores'
+    )
+    .openapi({ example: 'storybook.zip' }),
 });
+
+function constantTimeEquals(left: string, right: string): boolean {
+  if (left.length !== right.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < left.length; i += 1) {
+    mismatch |= left.charCodeAt(i) ^ right.charCodeAt(i);
+  }
+  return mismatch === 0;
+}
 
 const UploadResponseSchema = z.object({
   success: z.boolean(),
@@ -399,6 +442,14 @@ const CoverageUploadResponseSchema = z.object({
   coverageUrl: z.string().optional(),
 });
 
+const MetadataUploadResponseSchema = z.object({
+  success: z.boolean(),
+  message: z.string(),
+  queued: z.boolean(),
+  buildNumber: z.number(),
+  zipKey: z.string(),
+});
+
 // Coverage upload route - upload JSON and update build
 const coverageUploadRoute = createRoute({
   method: 'post',
@@ -590,6 +641,115 @@ app.openapi(coverageUploadRoute, async (c) => {
   }
 });
 
+const metadataUploadRoute = createRoute({
+  method: 'post',
+  path: '/upload/:project/:version/metadata',
+  request: {
+    params: ProjectVersionParamsSchema,
+  },
+  responses: {
+    201: {
+      description: 'Metadata ZIP uploaded',
+      content: {
+        'application/json': {
+          schema: MetadataUploadResponseSchema,
+        },
+      },
+    },
+    400: {
+      description: 'Invalid request payload or missing prior build',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema,
+        },
+      },
+    },
+    401: {
+      description: 'Unauthorized',
+      content: {
+        'application/json': {
+          schema: AuthErrorResponseSchema,
+        },
+      },
+    },
+    500: {
+      description: 'Internal server error',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema,
+        },
+      },
+    },
+  },
+});
+
+app.openapi(metadataUploadRoute, async (c) => {
+  try {
+    const { project, version } = c.req.valid('param');
+    const storage = c.var.storage;
+    const firestore = c.var.firestore;
+    const queue = c.var.processingQueue;
+
+    const body = await c.req.arrayBuffer();
+    if (!body || body.byteLength === 0) {
+      return c.json({ error: 'No file provided' }, 400);
+    }
+
+    if (!firestore) {
+      return c.json({ error: 'Firestore not configured' }, 500);
+    }
+
+    const build = await firestore.getLatestBuild(project, version);
+    if (!build) {
+      return c.json(
+        {
+          error: 'No build found for this project and version. Upload storybook.zip first.',
+        },
+        400
+      );
+    }
+
+    const zipKey = `${project}/${version}/builds/${build.buildNumber}/metadata-screenshots.zip`;
+    await storage.upload(zipKey, new Blob([body]).stream(), 'application/zip');
+
+    let queued = false;
+    if (queue) {
+      await queue.send({
+        projectId: project,
+        versionId: version,
+        buildId: build.id,
+        zipKey,
+        timestamp: Date.now(),
+      });
+      queued = true;
+    }
+
+    const queuedStatus: BuildProcessingStatus = 'queued';
+    if (firestore.updateProcessingStatus) {
+      await firestore.updateProcessingStatus(project, build.id, queuedStatus);
+    } else {
+      await firestore.updateBuild(project, build.id, { processingStatus: queuedStatus });
+    }
+
+    return c.json(
+      {
+        success: true,
+        message: queued ? 'Metadata ZIP uploaded and processing queued' : 'Metadata ZIP uploaded',
+        queued,
+        buildNumber: build.buildNumber,
+        zipKey,
+      },
+      201
+    );
+  } catch (error) {
+    console.error('Metadata upload error:', error);
+    return c.json(
+      { error: `Metadata upload failed: ${error instanceof Error ? error.message : 'Unknown error'}` },
+      500
+    );
+  }
+});
+
 // File retrieval route
 const retrievalRoute = createRoute({
   method: 'get',
@@ -761,13 +921,26 @@ const cleanupRoute = createRoute({
           schema: ErrorResponseSchema
         }
       }
+    },
+    404: {
+      description: 'Cleanup endpoint disabled',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema
+        }
+      }
     }
   }
 });
 
 app.openapi(cleanupRoute, async (c) => {
-  const cleanupHeader = c.req.header('X-Test-Cleanup');
-  if (cleanupHeader !== 'true') {
+  const configuredCleanupToken = c.var.cleanupToken;
+  if (!configuredCleanupToken) {
+    return c.json({ error: 'Cleanup endpoint is disabled' }, 404);
+  }
+
+  const cleanupHeader = c.req.header('X-Cleanup-Token') || '';
+  if (!constantTimeEquals(cleanupHeader, configuredCleanupToken)) {
     return c.json({ error: 'Unauthorized cleanup request' }, 401);
   }
 

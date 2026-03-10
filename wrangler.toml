@@ -27,6 +27,10 @@ bucket_name = "my-storybooks-production"
 # For local development, a preview bucket can be specified.
 preview_bucket_name = "my-storybooks-staging"
 
+[[queues.producers]]
+queue = "scry-build-processing"
+binding = "BUILD_PROCESSING_QUEUE"
+
 # --- Environment Variables and Secrets ---
 # The following variables are required for the S3-compatible API to work.
 # For local development with `wrangler dev`, you can define them in this `.dev.vars` file.
@@ -45,6 +49,7 @@ R2_BUCKET_NAME = "my-storybooks-production"
 # - FIREBASE_PROJECT_ID
 # - FIREBASE_CLIENT_EMAIL
 # - FIREBASE_PRIVATE_KEY
+# - CLEANUP_TOKEN (required to enable DELETE /cleanup/:project/:version)
 # - SENTRY_DSN (Sentry Data Source Name for error tracking)
 #
 # DO NOT add placeholder values here - they will override secrets!
@@ -59,11 +64,11 @@ binding = "STORYBOOK_BUCKET"
 bucket_name = "my-storybooks-staging"
 preview_bucket_name = "my-storybooks-staging"
 
-# Observability and Logging Configuration
-[[queues.producers]]
-queue = "scry-build-processing"
+[[env.preview.queues.producers]]
+queue = "scry-build-processing-preview"
 binding = "BUILD_PROCESSING_QUEUE"
 
+# Observability and Logging Configuration
 [observability]
 [observability.logs]
 enabled = true  # Enable logging

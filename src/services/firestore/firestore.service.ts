@@ -1,4 +1,11 @@
-import type { Build, BuildCoverage, CreateBuildData, UpdateBuildData, BuildStatus } from './firestore.types.js';
+import type {
+  Build,
+  BuildCoverage,
+  BuildProcessingStatus,
+  BuildStatus,
+  CreateBuildData,
+  UpdateBuildData,
+} from './firestore.types.js';
 
 /**
  * Defines the contract for all Firestore operations within the application.
@@ -57,7 +64,8 @@ export interface FirestoreService {
    * @returns A promise that resolves to the latest Build record or null if none found
    */
   getLatestBuild(
-    projectId: string
+    projectId: string,
+    versionId?: string
   ): Promise<Build | null>;
 
   /**
@@ -101,6 +109,18 @@ export interface FirestoreService {
     projectId: string,
     buildId: string,
     coverage: BuildCoverage
+  ): Promise<void>;
+
+  /**
+   * Updates the metadata processing state for a build.
+   * @param projectId The project identifier
+   * @param buildId The build identifier
+   * @param status The processing status value
+   */
+  updateProcessingStatus?(
+    projectId: string,
+    buildId: string,
+    status: BuildProcessingStatus
   ): Promise<void>;
 
   /**
