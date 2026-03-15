@@ -8,6 +8,8 @@ import type {
   BuildStatus,
   CreateBuildData,
   UpdateBuildData,
+  Upload,
+  CreateUploadData,
 } from './firestore.types.js';
 
 /**
@@ -242,6 +244,106 @@ export class FirestoreServiceNode implements FirestoreService {
   ): Promise<void> {
     const buildRef = this.db.doc(`projects/${projectId}/builds/${buildId}`);
     await buildRef.delete();
+  }
+
+  // ============= UPLOAD OPERATIONS =============
+
+  async createUpload(
+    projectId: string,
+    data: CreateUploadData
+  ): Promise<Upload> {
+    return this.db.runTransaction(async (transaction) => {
+      const counterRef = this.db.doc(`projects/${projectId}/counters/uploads`);
+      const counterSnap = await transaction.get(counterRef);
+
+      let uploadNumber = 1;
+      if (!counterSnap.exists) {
+        transaction.set(counterRef, { currentUploadNumber: 1 });
+      } else {
+        uploadNumber = counterSnap.data()!.currentUploadNumber + 1;
+        transaction.update(counterRef, {
+          currentUploadNumber: admin.firestore.FieldValue.increment(1) as any
+        });
+      }
+
+      const uploadRef = this.db.collection(`projects/${projectId}/uploads`).doc();
+      const uploadData = {
+        projectId,
+        uploadNumber,
+        imageCount: data.imageCount,
+        zipUrl: data.zipUrl,
+        status: 'active' as const,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdBy: this.serviceAccountId,
+      };
+
+      transaction.set(uploadRef, uploadData);
+
+      return {
+        id: uploadRef.id,
+        projectId,
+        uploadNumber,
+        imageCount: data.imageCount,
+        zipUrl: data.zipUrl,
+        status: 'active' as const,
+        createdAt: new Date(),
+        createdBy: this.serviceAccountId,
+      };
+    });
+  }
+
+  async getUpload(
+    projectId: string,
+    uploadId: string
+  ): Promise<Upload | null> {
+    const ref = this.db.doc(`projects/${projectId}/uploads/${uploadId}`);
+    const snap = await ref.get();
+
+    if (!snap.exists) return null;
+    return this.convertDocToUpload(snap.id, snap.data()!);
+  }
+
+  async getProjectUploads(
+    projectId: string,
+    limitCount: number = 50
+  ): Promise<Upload[]> {
+    const snapshot = await this.db.collection(`projects/${projectId}/uploads`)
+      .orderBy('uploadNumber', 'desc')
+      .limit(limitCount)
+      .get();
+
+    return snapshot.docs.map(doc => this.convertDocToUpload(doc.id, doc.data()));
+  }
+
+  async updateUploadProcessingStatus(
+    projectId: string,
+    uploadId: string,
+    status: BuildProcessingStatus
+  ): Promise<void> {
+    const ref = this.db.doc(`projects/${projectId}/uploads/${uploadId}`);
+    await ref.update({ processingStatus: status } as any);
+  }
+
+  async deleteUpload(
+    projectId: string,
+    uploadId: string
+  ): Promise<void> {
+    const ref = this.db.doc(`projects/${projectId}/uploads/${uploadId}`);
+    await ref.delete();
+  }
+
+  private convertDocToUpload(id: string, data: any): Upload {
+    return {
+      id,
+      projectId: data.projectId,
+      uploadNumber: data.uploadNumber,
+      imageCount: data.imageCount,
+      zipUrl: data.zipUrl,
+      status: data.status,
+      processingStatus: data.processingStatus,
+      createdAt: data.createdAt?.toDate?.() || new Date(),
+      createdBy: data.createdBy,
+    };
   }
 
   /**

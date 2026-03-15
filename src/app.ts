@@ -12,6 +12,7 @@ import type {
   BuildCoverage,
   BuildProcessingStatus,
   CreateBuildData,
+  CreateUploadData,
 } from './services/firestore/firestore.types.js';
 import type { ApiKeyService } from './services/apikey/apikey.service.js';
 import { apiKeyAuth, type AuthVariables } from './middleware/auth.js';
@@ -39,6 +40,7 @@ app.use('*', logger());
 // This middleware validates the X-API-Key header against Firestore-stored keys
 app.use('/upload/*', apiKeyAuth());
 app.use('/presigned-url/*', apiKeyAuth());
+app.use('/upload-images/*', apiKeyAuth());
 
 const PROJECT_SEGMENT_REGEX = /^[a-zA-Z0-9_-]+$/;
 const VERSION_SEGMENT_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
@@ -951,6 +953,190 @@ app.openapi(cleanupRoute, async (c) => {
   await storage.deleteByPrefix(prefix);
 
   return c.json({ message: 'Cleanup completed' }, 200);
+});
+
+// ============= IMAGE UPLOAD ROUTES =============
+
+const ImageUploadInitResponseSchema = z.object({
+  success: z.boolean(),
+  uploadId: z.string(),
+  uploadNumber: z.number(),
+  presignedUrl: z.string(),
+  zipKey: z.string(),
+});
+
+const ImageUploadCompleteResponseSchema = z.object({
+  success: z.boolean(),
+  message: z.string(),
+  queued: z.boolean(),
+});
+
+const ProjectParamSchema = z.object({
+  project: z.string().min(1).regex(PROJECT_SEGMENT_REGEX, 'Project name must contain only alphanumeric characters, hyphens, and underscores').openapi({ example: 'my-project' }),
+});
+
+// POST /upload-images/:project — Initialize upload, create Firestore record, return presigned URL
+const imageUploadInitRoute = createRoute({
+  method: 'post',
+  path: '/upload-images/:project',
+  request: {
+    params: ProjectParamSchema,
+  },
+  responses: {
+    201: {
+      description: 'Upload initialized with presigned URL',
+      content: {
+        'application/json': {
+          schema: ImageUploadInitResponseSchema,
+        },
+      },
+    },
+    400: {
+      description: 'Invalid request',
+      content: {
+        'application/json': { schema: ErrorResponseSchema },
+      },
+    },
+    500: {
+      description: 'Internal server error',
+      content: {
+        'application/json': { schema: ErrorResponseSchema },
+      },
+    },
+  },
+});
+
+app.openapi(imageUploadInitRoute, async (c) => {
+  try {
+    const { project } = c.req.valid('param');
+    const storage = c.var.storage;
+    const firestore = c.var.firestore;
+
+    if (!firestore) {
+      return c.json({ error: 'Firestore not configured' }, 500);
+    }
+
+    // Parse optional body for image count
+    let imageCount = 0;
+    try {
+      const body = await c.req.json();
+      imageCount = body.imageCount || 0;
+    } catch {
+      // No body is ok
+    }
+
+    // Create upload record in Firestore
+    const upload = await firestore.createUpload(project, {
+      imageCount,
+      zipUrl: '', // Will be set after upload
+    });
+
+    // Generate presigned URL for ZIP upload
+    const zipKey = `${project}/uploads/${upload.uploadNumber}/images.zip`;
+    const presignedData = await storage.getPresignedUploadUrl(zipKey, 'application/zip');
+
+    return c.json(
+      {
+        success: true,
+        uploadId: upload.id,
+        uploadNumber: upload.uploadNumber,
+        presignedUrl: presignedData.url,
+        zipKey,
+      },
+      201
+    );
+  } catch (error) {
+    console.error('Image upload init error:', error);
+    return c.json(
+      { error: `Upload initialization failed: ${error instanceof Error ? error.message : 'Unknown error'}` },
+      500
+    );
+  }
+});
+
+// POST /upload-images/:project/complete — Signal upload complete, enqueue for processing
+const imageUploadCompleteRoute = createRoute({
+  method: 'post',
+  path: '/upload-images/:project/complete',
+  request: {
+    params: ProjectParamSchema,
+  },
+  responses: {
+    200: {
+      description: 'Upload queued for processing',
+      content: {
+        'application/json': {
+          schema: ImageUploadCompleteResponseSchema,
+        },
+      },
+    },
+    400: {
+      description: 'Invalid request',
+      content: {
+        'application/json': { schema: ErrorResponseSchema },
+      },
+    },
+    500: {
+      description: 'Internal server error',
+      content: {
+        'application/json': { schema: ErrorResponseSchema },
+      },
+    },
+  },
+});
+
+app.openapi(imageUploadCompleteRoute, async (c) => {
+  try {
+    const { project } = c.req.valid('param');
+    const firestore = c.var.firestore;
+    const queue = c.var.processingQueue;
+
+    if (!firestore) {
+      return c.json({ error: 'Firestore not configured' }, 500);
+    }
+
+    let uploadId: string;
+    let zipKey: string;
+    try {
+      const body = await c.req.json();
+      uploadId = body.uploadId;
+      zipKey = body.zipKey;
+    } catch {
+      return c.json({ error: 'Request body must include uploadId and zipKey' }, 400);
+    }
+
+    if (!uploadId || !zipKey) {
+      return c.json({ error: 'uploadId and zipKey are required' }, 400);
+    }
+
+    // Update upload status to queued
+    await firestore.updateUploadProcessingStatus(project, uploadId, 'queued');
+
+    // Enqueue for worker processing
+    let queued = false;
+    if (queue) {
+      await queue.send({
+        type: 'upload',
+        projectId: project,
+        uploadId,
+        zipKey,
+        timestamp: Date.now(),
+      });
+      queued = true;
+    }
+
+    return c.json({
+      success: true,
+      message: queued ? 'Upload queued for processing' : 'Upload recorded (no processing queue configured)',
+      queued,
+    }, 200);
+  } catch (error) {
+    console.error('Image upload complete error:', error);
+    return c.json(
+      { error: `Upload completion failed: ${error instanceof Error ? error.message : 'Unknown error'}` },
+      500
+    );
+  }
 });
 
 // Serve OpenAPI spec

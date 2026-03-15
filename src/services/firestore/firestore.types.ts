@@ -147,6 +147,29 @@ export interface CreateBuildData {
   coverage?: BuildCoverage;
 }
 
+// ============= UPLOAD TYPES =============
+
+export type UploadStatus = 'active' | 'archived';
+
+export interface Upload {
+  id: string;
+  projectId: string;
+  uploadNumber: number;
+  imageCount: number;
+  zipUrl: string;
+  status: UploadStatus;
+  processingStatus?: BuildProcessingStatus;
+  createdAt: Date;
+  createdBy: string;
+}
+
+export interface CreateUploadData {
+  imageCount: number;
+  zipUrl: string;
+}
+
+// ============= BUILD UPDATE TYPES =============
+
 /**
  * Data that can be updated in a build record
  */
