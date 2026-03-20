@@ -6,6 +6,8 @@ import type {
   BuildStatus,
   CreateBuildData,
   UpdateBuildData,
+  Upload,
+  CreateUploadData,
 } from './firestore.types.js';
 
 interface FirestoreConfig {
@@ -402,6 +404,153 @@ export class FirestoreServiceWorker implements FirestoreService {
     if (!response.ok) {
       throw new Error(`Failed to delete build: ${response.statusText}`);
     }
+  }
+
+  // ============= UPLOAD OPERATIONS =============
+
+  /**
+   * Creates a new upload record with auto-incrementing upload number.
+   * Note: REST API doesn't support true transactions, so we use a simplified approach
+   * (same as createBuild). The Node.js implementation uses Firestore transactions
+   * for atomicity.
+   */
+  async createUpload(
+    projectId: string,
+    data: CreateUploadData
+  ): Promise<Upload> {
+    const token = await this.getAccessToken();
+
+    // Get current upload number
+    const counterPath = `projects/${projectId}/counters/uploads`;
+    let uploadNumber = 1;
+
+    try {
+      const counterDoc = await this.getDocument(counterPath, token);
+      if (counterDoc && counterDoc.fields?.currentUploadNumber?.integerValue) {
+        uploadNumber = parseInt(counterDoc.fields.currentUploadNumber.integerValue) + 1;
+      }
+    } catch (error) {
+      console.error(`Failed to read upload counter for project ${projectId}:`, error);
+    }
+
+    // Update counter
+    await this.setDocument(counterPath, {
+      currentUploadNumber: { integerValue: uploadNumber.toString() }
+    }, token);
+
+    // Create upload document
+    const uploadId = this.generateId();
+    const uploadPath = `projects/${projectId}/uploads/${uploadId}`;
+    const now = new Date();
+
+    const uploadDoc = {
+      projectId: { stringValue: projectId },
+      uploadNumber: { integerValue: uploadNumber.toString() },
+      imageCount: { integerValue: data.imageCount.toString() },
+      zipUrl: { stringValue: data.zipUrl },
+      status: { stringValue: 'active' },
+      createdAt: { timestampValue: now.toISOString() },
+      createdBy: { stringValue: this.config.serviceAccountId },
+    };
+
+    await this.setDocument(uploadPath, uploadDoc, token);
+
+    return {
+      id: uploadId,
+      projectId,
+      uploadNumber,
+      imageCount: data.imageCount,
+      zipUrl: data.zipUrl,
+      status: 'active',
+      createdAt: now,
+      createdBy: this.config.serviceAccountId,
+    };
+  }
+
+  async getUpload(
+    projectId: string,
+    uploadId: string
+  ): Promise<Upload | null> {
+    const token = await this.getAccessToken();
+    const uploadPath = `projects/${projectId}/uploads/${uploadId}`;
+
+    try {
+      const doc = await this.getDocument(uploadPath, token);
+      if (!doc) return null;
+      return this.convertDocToUpload(uploadId, doc.fields);
+    } catch (error) {
+      console.error(`Failed to get upload ${uploadId} for project ${projectId}:`, error);
+      return null;
+    }
+  }
+
+  async getProjectUploads(
+    projectId: string,
+    limitCount: number = 50
+  ): Promise<Upload[]> {
+    const token = await this.getAccessToken();
+
+    const structuredQuery: any = {
+      from: [{ collectionId: 'uploads' }],
+      orderBy: [{ field: { fieldPath: 'uploadNumber' }, direction: 'DESCENDING' }],
+      limit: limitCount
+    };
+
+    const docs = await this.queryDocuments(`projects/${projectId}`, structuredQuery, token);
+    return docs.map(doc => {
+      const id = doc.name.split('/').pop()!;
+      return this.convertDocToUpload(id, doc.fields);
+    });
+  }
+
+  async updateUploadProcessingStatus(
+    projectId: string,
+    uploadId: string,
+    status: BuildProcessingStatus
+  ): Promise<void> {
+    const token = await this.getAccessToken();
+    const uploadPath = `projects/${projectId}/uploads/${uploadId}`;
+    await this.patchDocument(uploadPath, { processingStatus: { stringValue: status } }, token);
+  }
+
+  async deleteUpload(
+    projectId: string,
+    uploadId: string
+  ): Promise<void> {
+    const token = await this.getAccessToken();
+    const uploadPath = `projects/${projectId}/uploads/${uploadId}`;
+
+    const url = `${this.baseUrl}/${uploadPath}`;
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to delete upload: ${response.statusText}`);
+    }
+  }
+
+  private convertDocToUpload(id: string, fields: any): Upload {
+    const projectId = fields.projectId?.stringValue;
+    const uploadNumber = fields.uploadNumber?.integerValue;
+    if (!projectId || uploadNumber === undefined) {
+      throw new Error(`Upload document ${id} is missing required fields (projectId, uploadNumber)`);
+    }
+
+    return {
+      id,
+      projectId,
+      uploadNumber: parseInt(uploadNumber),
+      imageCount: parseInt(fields.imageCount?.integerValue || '0'),
+      zipUrl: fields.zipUrl?.stringValue || '',
+      status: (fields.status?.stringValue || 'active') as Upload['status'],
+      processingStatus: fields.processingStatus?.stringValue,
+      createdAt: new Date(fields.createdAt?.timestampValue || new Date()),
+      createdBy: fields.createdBy?.stringValue || '',
+    };
   }
 
   /**
