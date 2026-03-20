@@ -408,6 +408,12 @@ export class FirestoreServiceWorker implements FirestoreService {
 
   // ============= UPLOAD OPERATIONS =============
 
+  /**
+   * Creates a new upload record with auto-incrementing upload number.
+   * Note: REST API doesn't support true transactions, so we use a simplified approach
+   * (same as createBuild). The Node.js implementation uses Firestore transactions
+   * for atomicity.
+   */
   async createUpload(
     projectId: string,
     data: CreateUploadData
@@ -423,8 +429,8 @@ export class FirestoreServiceWorker implements FirestoreService {
       if (counterDoc && counterDoc.fields?.currentUploadNumber?.integerValue) {
         uploadNumber = parseInt(counterDoc.fields.currentUploadNumber.integerValue) + 1;
       }
-    } catch {
-      // Counter doesn't exist, will create it
+    } catch (error) {
+      console.error(`Failed to read upload counter for project ${projectId}:`, error);
     }
 
     // Update counter
@@ -472,7 +478,8 @@ export class FirestoreServiceWorker implements FirestoreService {
       const doc = await this.getDocument(uploadPath, token);
       if (!doc) return null;
       return this.convertDocToUpload(uploadId, doc.fields);
-    } catch {
+    } catch (error) {
+      console.error(`Failed to get upload ${uploadId} for project ${projectId}:`, error);
       return null;
     }
   }
@@ -527,13 +534,19 @@ export class FirestoreServiceWorker implements FirestoreService {
   }
 
   private convertDocToUpload(id: string, fields: any): Upload {
+    const projectId = fields.projectId?.stringValue;
+    const uploadNumber = fields.uploadNumber?.integerValue;
+    if (!projectId || uploadNumber === undefined) {
+      throw new Error(`Upload document ${id} is missing required fields (projectId, uploadNumber)`);
+    }
+
     return {
       id,
-      projectId: fields.projectId?.stringValue || '',
-      uploadNumber: parseInt(fields.uploadNumber?.integerValue || '0'),
+      projectId,
+      uploadNumber: parseInt(uploadNumber),
       imageCount: parseInt(fields.imageCount?.integerValue || '0'),
       zipUrl: fields.zipUrl?.stringValue || '',
-      status: (fields.status?.stringValue || 'active') as any,
+      status: (fields.status?.stringValue || 'active') as Upload['status'],
       processingStatus: fields.processingStatus?.stringValue,
       createdAt: new Date(fields.createdAt?.timestampValue || new Date()),
       createdBy: fields.createdBy?.stringValue || '',

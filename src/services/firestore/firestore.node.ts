@@ -262,7 +262,7 @@ export class FirestoreServiceNode implements FirestoreService {
       } else {
         uploadNumber = counterSnap.data()!.currentUploadNumber + 1;
         transaction.update(counterRef, {
-          currentUploadNumber: admin.firestore.FieldValue.increment(1) as any
+          currentUploadNumber: admin.firestore.FieldValue.increment(1),
         });
       }
 
@@ -321,7 +321,7 @@ export class FirestoreServiceNode implements FirestoreService {
     status: BuildProcessingStatus
   ): Promise<void> {
     const ref = this.db.doc(`projects/${projectId}/uploads/${uploadId}`);
-    await ref.update({ processingStatus: status } as any);
+    await ref.update({ processingStatus: status });
   }
 
   async deleteUpload(

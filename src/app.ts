@@ -975,6 +975,11 @@ const ProjectParamSchema = z.object({
   project: z.string().min(1).regex(PROJECT_SEGMENT_REGEX, 'Project name must contain only alphanumeric characters, hyphens, and underscores').openapi({ example: 'my-project' }),
 });
 
+const ImageUploadCompleteBodySchema = z.object({
+  uploadId: z.string().min(1, 'uploadId is required'),
+  zipKey: z.string().min(1, 'zipKey is required'),
+});
+
 // POST /upload-images/:project — Initialize upload, create Firestore record, return presigned URL
 const imageUploadInitRoute = createRoute({
   method: 'post',
@@ -1060,6 +1065,13 @@ const imageUploadCompleteRoute = createRoute({
   path: '/upload-images/:project/complete',
   request: {
     params: ProjectParamSchema,
+    body: {
+      content: {
+        'application/json': {
+          schema: ImageUploadCompleteBodySchema,
+        },
+      },
+    },
   },
   responses: {
     200: {
@@ -1095,19 +1107,7 @@ app.openapi(imageUploadCompleteRoute, async (c) => {
       return c.json({ error: 'Firestore not configured' }, 500);
     }
 
-    let uploadId: string;
-    let zipKey: string;
-    try {
-      const body = await c.req.json();
-      uploadId = body.uploadId;
-      zipKey = body.zipKey;
-    } catch {
-      return c.json({ error: 'Request body must include uploadId and zipKey' }, 400);
-    }
-
-    if (!uploadId || !zipKey) {
-      return c.json({ error: 'uploadId and zipKey are required' }, 400);
-    }
+    const { uploadId, zipKey } = c.req.valid('json');
 
     // Update upload status to queued
     await firestore.updateUploadProcessingStatus(project, uploadId, 'queued');
