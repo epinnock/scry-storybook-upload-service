@@ -1,6 +1,7 @@
 // In src/entry.worker.ts
 
 import * as Sentry from '@sentry/cloudflare';
+import { scrubEvent } from './sentry-scrub.js';
 import { Hono } from 'hono';
 import { app } from './app';
 import { R2S3StorageService } from './services/storage/storage.worker';
@@ -183,6 +184,10 @@ export default Sentry.withSentry(
     debug: env.NODE_ENV !== 'production',
     // Attach request data to events for better debugging
     sendDefaultPii: false,
+    // This service authenticates with an X-API-Key header carrying a customer's
+    // project key, and the SDK attaches request context by default — so without
+    // these, a customer credential reaches Sentry on every authenticated error.
+    dataCollection: { userInfo: false, httpBodies: [] },
     // Configure which errors to ignore
     ignoreErrors: [
       // Ignore common non-actionable errors
@@ -202,7 +207,8 @@ export default Sentry.withSentry(
       if (env.NODE_ENV === 'test') {
         return null;
       }
-      return event;
+      // Strip credentials last, so nothing added above can slip past it.
+      return scrubEvent(event);
     },
   }),
   handler as ExportedHandler

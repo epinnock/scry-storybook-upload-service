@@ -5,6 +5,8 @@ import type {
   BuildStatus,
   CreateBuildData,
   UpdateBuildData,
+  Upload,
+  CreateUploadData,
 } from './firestore.types.js';
 
 /**
@@ -132,5 +134,48 @@ export interface FirestoreService {
   deleteBuild(
     projectId: string,
     buildId: string
+  ): Promise<void>;
+
+  // ============= UPLOAD OPERATIONS =============
+
+  /**
+   * Creates a new upload record with auto-incrementing upload number
+   */
+  createUpload(
+    projectId: string,
+    data: CreateUploadData
+  ): Promise<Upload>;
+
+  /**
+   * Retrieves an upload by its ID
+   */
+  getUpload(
+    projectId: string,
+    uploadId: string
+  ): Promise<Upload | null>;
+
+  /**
+   * Gets all uploads for a project
+   */
+  getProjectUploads(
+    projectId: string,
+    limitCount?: number
+  ): Promise<Upload[]>;
+
+  /**
+   * Updates the processing status of an upload
+   */
+  updateUploadProcessingStatus(
+    projectId: string,
+    uploadId: string,
+    status: BuildProcessingStatus
+  ): Promise<void>;
+
+  /**
+   * Deletes an upload record
+   */
+  deleteUpload(
+    projectId: string,
+    uploadId: string
   ): Promise<void>;
 }
