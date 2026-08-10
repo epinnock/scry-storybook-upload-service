@@ -393,6 +393,16 @@ app.openapi(uploadRoute, async (c) => {
         buildNumber = build.buildNumber;
         console.log(`[INFO] Build created: id=${buildId}, number=${buildNumber}`);
 
+        // Opens the funnel (playbook §5.5): uploaded -> processed -> indexed ->
+        // searched. Not awaited, and trackEvent swallows its own errors — an
+        // upload that succeeded must not fail because analytics did not land.
+        void firestore.trackEvent?.('storybook_uploaded', {
+          projectId: project,
+          buildId,
+          buildNumber,
+          versionId: version,
+        });
+
         // Enqueue build for async processing (LLM inspection, embeddings, vector DB)
         const processingQueue = c.get('processingQueue');
         if (processingQueue && buildId) {

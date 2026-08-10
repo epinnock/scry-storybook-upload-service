@@ -20,6 +20,12 @@ export interface FirestoreService {
    * @param data The build data including versionId and zipUrl
    * @returns A promise that resolves to the created Build record
    */
+  /**
+   * Record a product event (playbook §5.5). Optional so the Node implementation
+   * is not forced to grow one; the deployed Worker provides it.
+   */
+  trackEvent?(name: string, props?: Record<string, string | number | boolean | undefined>): Promise<void>;
+
   createBuild(
     projectId: string,
     data: CreateBuildData

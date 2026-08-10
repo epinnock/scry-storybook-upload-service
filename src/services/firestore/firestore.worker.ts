@@ -36,6 +36,36 @@ export class FirestoreServiceWorker implements FirestoreService {
    * Creates a new build record with auto-incrementing build number
    * Note: REST API doesn't support true transactions, so we use a simplified approach
    */
+  /**
+   * Record a product event, reusing this service's existing credentials.
+   *
+   * Never throws. An upload that succeeded must not be reported as failed
+   * because an analytics write did not land — the same rule the queue send
+   * already follows, for the same reason.
+   */
+  async trackEvent(name: string, props: Record<string, string | number | boolean | undefined> = {}): Promise<void> {
+    try {
+      const token = await this.getAccessToken();
+      const fields: Record<string, unknown> = {
+        name: { stringValue: name },
+        at: { timestampValue: new Date().toISOString() },
+      };
+      for (const [key, value] of Object.entries(props)) {
+        if (value === undefined) continue;
+        if (typeof value === 'number') fields[key] = { integerValue: String(Math.round(value)) };
+        else if (typeof value === 'boolean') fields[key] = { booleanValue: value };
+        else fields[key] = { stringValue: String(value) };
+      }
+      await fetch(`${this.baseUrl}/events`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields }),
+      });
+    } catch (e) {
+      console.warn('[EVENTS] Could not record event:', name, e);
+    }
+  }
+
   async createBuild(
     projectId: string,
     data: CreateBuildData
