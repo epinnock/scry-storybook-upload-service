@@ -897,6 +897,19 @@ app.openapi(presignedUrlRoute, async (c) => {
       buildNumber = build.buildNumber;
       
       console.log(`[INFO] Build record created for presigned upload: ID=${buildId}, Number=${buildNumber}`);
+
+      // Opens the funnel (playbook §5.5). This is the route the deployer
+      // actually uses — the emitter was first added only to POST /upload, a
+      // direct multipart path nothing in the real flow takes, so the event never
+      // fired despite being deployed. The PMF tracker caught it by noticing
+      // builds that were processed and indexed with no upload recorded: a
+      // contradiction rather than a drop-off.
+      void firestore.trackEvent?.('storybook_uploaded', {
+        projectId: project,
+        buildId,
+        buildNumber,
+        versionId: version,
+      });
     } catch (firestoreError) {
       // Log error but don't fail the presigned URL generation
       console.error('Firestore error (presigned URL succeeded):', firestoreError);
