@@ -1,6 +1,7 @@
 // In src/app.ts
 
 import { Hono } from 'hono';
+import { currentTraceContext } from './trace-context.js';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { createRoute } from '@hono/zod-openapi';
 import { z } from 'zod';
@@ -402,6 +403,8 @@ app.openapi(uploadRoute, async (c) => {
               buildId,
               zipKey: key,
               timestamp: Date.now(),
+              // Carries the trace across the queue; see src/trace-context.ts.
+              trace: currentTraceContext(),
             });
             console.log(`[INFO] Build queued for processing: buildId=${buildId}`);
           } catch (queueError) {
@@ -722,6 +725,7 @@ app.openapi(metadataUploadRoute, async (c) => {
         buildId: build.id,
         zipKey,
         timestamp: Date.now(),
+        trace: currentTraceContext(),
       });
       queued = true;
     }
@@ -1121,6 +1125,7 @@ app.openapi(imageUploadCompleteRoute, async (c) => {
         uploadId,
         zipKey,
         timestamp: Date.now(),
+        trace: currentTraceContext(),
       });
       queued = true;
     }
