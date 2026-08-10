@@ -33,6 +33,8 @@ type Bindings = {
 
   // Sentry configuration
   SENTRY_DSN?: string;
+  /** Optional. Defaults to 1.0 — see below. */
+  SENTRY_TRACES_SAMPLE_RATE?: string;
   SENTRY_ENVIRONMENT?: string;
   SENTRY_RELEASE?: string;
 
@@ -177,9 +179,14 @@ export default Sentry.withSentry(
     environment: env.SENTRY_ENVIRONMENT || env.NODE_ENV || 'production',
     // Release version for tracking deployments and source maps
     release: env.SENTRY_RELEASE,
-    // Capture 100% of errors
-    // For high-traffic workers, consider lowering this in production
-    tracesSampleRate: env.NODE_ENV === 'production' ? 0.1 : 1.0,
+    // Tracing quota is a much smaller budget than errors, so this is a
+    // deliberate rate rather than a default. Sampling at 0.1 meant nine deploys
+    // in ten had no trace — and with a handful of deploys a day, the build
+    // someone is asking about is then almost certainly one of the nine.
+    // Override with SENTRY_TRACES_SAMPLE_RATE if volume grows.
+    tracesSampleRate: env.SENTRY_TRACES_SAMPLE_RATE
+      ? Number(env.SENTRY_TRACES_SAMPLE_RATE)
+      : 1.0,
     // Enable debug mode in non-production environments
     debug: env.NODE_ENV !== 'production',
     // Attach request data to events for better debugging
