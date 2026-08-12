@@ -1008,3 +1008,5 @@ Additional documentation is available in the `docs/` directory:
 - [PRESIGNED_URL_TROUBLESHOOTING.md](docs/PRESIGNED_URL_TROUBLESHOOTING.md) - Troubleshooting presigned URLs
 - [PRODUCTION_SETUP.md](docs/PRODUCTION_SETUP.md) - Production deployment guide
 - [STORAGE_FLOW_OVERVIEW.md](docs/STORAGE_FLOW_OVERVIEW.md) - Storage architecture overview
+
+Developed 2026 by Scry
