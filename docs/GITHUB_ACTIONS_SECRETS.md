@@ -13,7 +13,7 @@ Navigate to your repository → Settings → Secrets and variables → Actions �
 | `CLOUDFLARE_API_TOKEN` | Cloudflare API token with Workers permissions | [Cloudflare Dashboard](https://dash.cloudflare.com/profile/api-tokens) → Create Token → "Edit Cloudflare Workers" template |
 | `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare account ID | Cloudflare Dashboard → Workers & Pages → Account ID (right sidebar) |
 
-### Required Secrets for E2E Testing
+### Credentials for Explicit E2E Runs (Not Used by PR CI)
 
 | Secret Name | Description | How to Obtain |
 |-------------|-------------|---------------|
@@ -111,15 +111,36 @@ wrangler secret put FIREBASE_PRIVATE_KEY
 
 ## Environment-Specific Configuration
 
-### Preview Environment (PRs)
+### Staging Environment (`stage` branch)
 
-Preview deployments use the `preview` environment in `wrangler.toml`:
+Staging deployments use `--env staging` (formerly `--env preview`):
 - Uses staging R2 bucket: `my-storybooks-staging`
-- Deployed as: `storybook-deployment-service-pr-{PR_NUMBER}`
+- Produces to `scry-build-processing-staging`; build-processing owns its
+  `scry-build-processing-staging-dlq` dead-letter queue
+- Deployed as: `storybook-deployment-service-preview` (name unchanged)
+- Health: `https://storybook-deployment-service-preview.epinnock.workers.dev/healthz`
+- PRs only run tests, coverage, typecheck, and build; they never deploy
+
+The existing staging Worker needs its own runtime secrets before functional
+uploads can work. Set `FIREBASE_PROJECT_ID` to `scry-dev-dashboard-stage`, plus
+`FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`, `FIRESTORE_SERVICE_ACCOUNT_ID`,
+and `SENTRY_DSN` for staging. Presigned uploads require `R2_ACCOUNT_ID`,
+`R2_S3_ACCESS_KEY_ID`, and `R2_S3_SECRET_ACCESS_KEY` with staging bucket access;
+cleanup additionally requires `CLEANUP_TOKEN`. Apply any secret commands above
+with `--env staging`. If using local bulk-secret files, use the name
+`.secrets.staging.json`; production uses `.secrets.production.json`. Keep those
+files outside version control. CI deploys do not provision runtime secrets.
+
+Create the `stage` branch from merged `main` and configure GitHub Environments
+`staging` and `production` before the first staging push. Both deploy jobs use the
+existing Actions secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, which
+can remain repository secrets or be scoped to the corresponding environments.
+No new Worker, queue, or DNS entry is required.
 
 ### Production Environment
 
-Production deployments use the default configuration:
+Production deployments use `--env production`, which matches the top-level
+configuration and preserves the existing Worker and its attached secrets:
 - Uses production R2 bucket: `my-storybooks-production`
 - Deployed as: `storybook-deployment-service`
 
@@ -134,11 +155,11 @@ wrangler secret list
 # Test deployment locally
 wrangler dev
 
-# Deploy to production
-wrangler deploy
+# Stamped deploy to production
+pnpm run deploy:production
 
-# Deploy to preview environment
-wrangler deploy --env preview
+# Stamped deploy to staging
+pnpm run deploy:staging
 ```
 
 ## Troubleshooting

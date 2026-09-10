@@ -5,72 +5,48 @@ name: Deploy Service
 on:
   push:
     branches:
+      - stage
       - main
-  workflow_dispatch: # Allows manual triggering
+    paths-ignore: ['**/*.md', 'docs/**']
+  pull_request:
+    branches: [stage, main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        type: choice
+        required: true
+        default: staging
+        options:
+          - staging
+          - production
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 env:
   # Sentry release version - uses git SHA for unique identification
   SENTRY_RELEASE: ${{ github.sha }}
 
 jobs:
-  # Job 1: Run tests with coverage before deployment
   test-and-coverage:
-    runs-on: ubuntu-latest
     name: Tests & Coverage Report
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    uses: ./.github/workflows/ci.yml
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: Install Dependencies
-        run: pnpm install --no-frozen-lockfile
-
-      - name: Run Unit Tests with Coverage
-        run: pnpm run test:coverage
-
-      - name: Upload Coverage Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: coverage/
-          retention-days: 30
-
-      - name: Coverage Summary
-        run: |
-          echo "## 📊 Coverage Report" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [ -f coverage/coverage-summary.json ]; then
-            # Extract coverage percentages using jq or simple parsing
-            echo "### Summary" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            cat coverage/coverage-summary.json | head -50 >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: Build Project
-        run: pnpm run build
-
-      - name: Cache Build Artifacts
-        uses: actions/cache@v4
-        with:
-          path: dist/
-          key: build-${{ github.sha }}
-          retention-days: 1
-
-  # Job 2: Deploy to Cloudflare Workers
-  deploy-worker:
+  deploy-staging:
     runs-on: ubuntu-latest
-    name: Deploy to Cloudflare Workers
+    name: Deploy to Staging
     needs: test-and-coverage
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/stage') ||
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
+    environment:
+      name: staging
+      url: https://storybook-deployment-service-preview.epinnock.workers.dev/healthz
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -86,13 +62,7 @@ jobs:
           version: 9
 
       - name: Install Dependencies
-        run: pnpm install --no-frozen-lockfile
-
-      - name: Restore Build Cache
-        uses: actions/cache@v4
-        with:
-          path: dist/
-          key: build-${{ github.sha }}
+        run: pnpm install --frozen-lockfile --prefer-offline
 
       - name: Set build timestamp
         id: stamp
@@ -105,7 +75,82 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: '4.99.0'
           command: >-
-            deploy
+            deploy --env staging
+            --var SCRY_ENV:staging
+            --var SCRY_COMMIT:${{ github.sha }}
+            --var SCRY_BRANCH:${{ github.ref_name }}
+            --var SCRY_BUILD_TIME:${{ steps.stamp.outputs.built_at }}
+            --var SCRY_DEPLOY_ID:${{ github.run_id }}
+            --var SCRY_ACTOR:${{ github.actor }}
+            --var SENTRY_RELEASE:${{ github.sha }}
+            --tag ${{ github.sha }}
+            --message "${{ github.ref_name }} ${{ github.actor }} run=${{ github.run_id }}"
+
+      - name: Verify deployed commit
+        shell: bash
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          for attempt in {1..6}; do
+            if curl -4fsS --connect-timeout 10 --max-time 20 \
+              https://storybook-deployment-service-preview.epinnock.workers.dev/healthz \
+              | jq -e --arg commit "$EXPECTED_COMMIT" '.commit == $commit' > /dev/null; then
+              echo "Staging verified at $EXPECTED_COMMIT"
+              exit 0
+            fi
+            echo "Verification attempt $attempt/6 failed"
+            if [ "$attempt" -lt 6 ]; then sleep 10; fi
+          done
+          echo "::error::Staging did not report the expected commit $EXPECTED_COMMIT"
+          exit 1
+
+  # Job 2: Deploy to Cloudflare Workers
+  deploy-worker:
+    runs-on: ubuntu-latest
+    name: Deploy to Production
+    needs: test-and-coverage
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'production')
+    environment:
+      name: production
+      url: https://storybook-deployment-service.epinnock.workers.dev/healthz
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: worker-build
+          path: dist/
+
+      - name: Set build timestamp
+        id: stamp
+        run: echo "built_at=$(date -u +%FT%TZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: '4.99.0'
+          command: >-
+            deploy --env production
+            --var SCRY_ENV:production
             --var SCRY_COMMIT:${{ github.sha }}
             --var SCRY_BRANCH:${{ github.ref_name }}
             --var SCRY_BUILD_TIME:${{ steps.stamp.outputs.built_at }}
@@ -150,17 +195,6 @@ jobs:
           set_commits: auto
           # Finalize the release after upload
           finalize: true
-
-      - name: Validate Deployment with E2E Tests
-        # Disabled for now (will be reintroduced later)
-        if: ${{ false }}
-        run: pnpm run validate:deployment
-        env:
-          # E2E tests need access to production secrets for validation
-          R2_S3_ACCESS_KEY_ID: ${{ secrets.R2_S3_ACCESS_KEY_ID }}
-          R2_S3_SECRET_ACCESS_KEY: ${{ secrets.R2_S3_SECRET_ACCESS_KEY }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
 
       # Notify Sentry of successful deployment
       - name: Notify Sentry of Deployment
