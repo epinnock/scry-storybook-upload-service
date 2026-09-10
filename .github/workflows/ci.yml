@@ -1,19 +1,11 @@
-name: CI - Pull Request Validation
+name: CI - Validation
 
+# Called by deploy.yml for PRs, stage/main pushes, and manual deploys.
 on:
-  pull_request:
-    branches: [ main ]
-  push:
-    branches-ignore: [ main ]  # Run on all branches except main
-  workflow_dispatch: # Allow manual triggering
+  workflow_call:
 
-# Default token permissions for this workflow.
-# Note: On PRs from forks, GitHub still restricts GITHUB_TOKEN write access;
-# we additionally guard comment steps to only run on same-repo PRs.
 permissions:
   contents: read
-  issues: write
-  pull-requests: write
 
 jobs:
   # Job 1: Quick validation (unit tests + build + coverage)
@@ -35,7 +27,7 @@ jobs:
           version: 9
 
       - name: Install Dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --frozen-lockfile --prefer-offline
 
       - name: Run Unit Tests with Coverage
         run: pnpm run test:coverage
@@ -56,249 +48,15 @@ jobs:
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
 
+      - name: TypeScript Check
+        run: pnpm run typecheck
+
       - name: Build Project
         run: pnpm run build
 
-      - name: Cache Build Artifacts
-        uses: actions/cache@v4
-        with:
-          path: dist/
-          key: build-${{ github.sha }}
-          retention-days: 1
-
-  # Job 2: E2E Testing (Local Development)
-  e2e-local:
-    runs-on: ubuntu-latest
-    name: E2E Tests (Local Worker)
-    needs: validate
-    # Disabled for now (will be reintroduced later)
-    if: ${{ false }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: Install Dependencies
-        run: pnpm install --no-frozen-lockfile
-
-      - name: Restore Build Cache
-        uses: actions/cache@v4
-        with:
-          path: dist/
-          key: build-${{ github.sha }}
-
-      - name: Run E2E Tests (Worker)
-        run: pnpm run e2e:worker
-        timeout-minutes: 10
-
-  # Job 3: Preview Deployment
-  preview-deploy:
-    runs-on: ubuntu-latest
-    name: Deploy Preview Environment
-    needs: validate
-    # Disabled for now (will be reintroduced later)
-    if: ${{ false }}
-    environment:
-      name: preview-pr-${{ github.event.number }}
-      url: https://storybook-deployment-service-pr-${{ github.event.number }}.scry-demo.workers.dev
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: Install Dependencies
-        run: pnpm install --no-frozen-lockfile
-
-      - name: Restore Build Cache
-        uses: actions/cache@v4
-        with:
-          path: dist/
-          key: build-${{ github.sha }}
-
-      - name: Set preview build timestamp
-        id: stamp
-        run: echo "built_at=$(date -u +%FT%TZ)" >> "$GITHUB_OUTPUT"
-
-      - name: Deploy to Preview
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: '4.99.0'
-          command: >-
-            deploy --name storybook-deployment-service-pr-${{ github.event.number }} --env preview
-            --var SCRY_SERVICE:storybook-deployment-service-pr-${{ github.event.number }}
-            --var SCRY_COMMIT:${{ github.sha }}
-            --var SCRY_BRANCH:${{ github.ref_name }}
-            --var SCRY_BUILD_TIME:${{ steps.stamp.outputs.built_at }}
-            --var SCRY_DEPLOY_ID:${{ github.run_id }}
-            --var SCRY_ACTOR:${{ github.actor }}
-            --var SENTRY_RELEASE:${{ github.sha }}
-            --tag ${{ github.sha }}
-            --message "${{ github.ref_name }} ${{ github.actor }} run=${{ github.run_id }}"
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-
-      - name: Comment PR with Preview URL
-        uses: actions/github-script@v7
-        # Avoid 403 "Resource not accessible by integration" on forked PRs.
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        continue-on-error: true
-        with:
-          script: |
-            const previewUrl = `https://storybook-deployment-service-pr-${{ github.event.number }}.scry-demo.workers.dev`;
-            const comment = `🚀 **Preview Deployment Ready!**
-            
-            Preview URL: ${previewUrl}
-            
-            This preview environment is automatically updated when you push changes to this PR.`;
-
-            try {
-              // Check if we already commented
-              const comments = await github.rest.issues.listComments({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-              });
-
-              const existingComment = comments.data.find(comment =>
-                comment.body?.includes('Preview Deployment Ready!')
-              );
-
-              if (existingComment) {
-                await github.rest.issues.updateComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: existingComment.id,
-                  body: comment
-                });
-              } else {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.issue.number,
-                  body: comment
-                });
-              }
-            } catch (err) {
-              // Don't fail the workflow on comment permission issues.
-              core.warning(`Unable to comment on PR: ${err?.message || err}`);
-            }
-
-  # Job 4: E2E Testing against Preview
-  e2e-preview:
-    runs-on: ubuntu-latest
-    name: E2E Tests (Preview Environment)
-    needs: [validate, preview-deploy]
-    # Disabled for now (will be reintroduced later)
-    if: ${{ false }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: Install Dependencies
-        run: pnpm install --no-frozen-lockfile
-
-      - name: Wait for Preview Deployment
-        run: sleep 30
-
-      - name: Run E2E Tests Against Preview
-        run: E2E_TARGET=https://storybook-deployment-service-pr-${{ github.event.number }}.scry-demo.workers.dev pnpm run test:e2e
-        env:
-          # Use staging R2 bucket for preview testing
-          R2_S3_ACCESS_KEY_ID: ${{ secrets.R2_S3_ACCESS_KEY_ID }}
-          R2_S3_SECRET_ACCESS_KEY: ${{ secrets.R2_S3_SECRET_ACCESS_KEY }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_BUCKET_NAME: my-storybooks-staging
-
-      - name: Upload E2E Test Results
+      - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: e2e-test-results-preview
-          path: |
-            artifacts/
-            e2e-report.json
-          retention-days: 7
-
-  # Job 5: Code Quality (Optional)
-  quality:
-    runs-on: ubuntu-latest
-    name: Code Quality Checks
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: Install Dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: TypeScript Check
-        run: pnpm run build --noEmit || echo "TypeScript check completed (build already validates types)"
-
-      - name: Check for TODO/FIXME comments
-        run: |
-          echo "Checking for TODO/FIXME comments..."
-          grep -r "TODO\|FIXME" src/ || echo "No TODO/FIXME comments found"
-
-  # Summary job that all others depend on
-  ci-complete:
-    runs-on: ubuntu-latest
-    name: CI Complete
-    # e2e-local / preview jobs are currently disabled
-    needs: [validate, quality]
-    if: always()
-    steps:
-      - name: Check CI Status
-        run: |
-          if [[ "${{ needs.validate.result }}" == "success" && 
-                "${{ needs.quality.result }}" == "success" ]]; then
-            echo "✅ All CI checks passed!"
-            exit 0
-          else
-            echo "❌ CI checks failed"
-            echo "Validate: ${{ needs.validate.result }}"
-            echo "Quality: ${{ needs.quality.result }}"
-            exit 1
-          fi
-
-      - name: PR Ready for Review
-        if: github.event_name == 'pull_request' && success()
-        run: echo "🎉 PR is ready for review! All checks passed."
+          name: worker-build
+          path: dist/
+          retention-days: 1

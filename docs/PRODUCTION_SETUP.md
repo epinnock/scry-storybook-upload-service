@@ -110,7 +110,7 @@ The deployment will:
 
 - **Security**: Never commit these values to Git. They are stored securely in Cloudflare's infrastructure.
 - **Environment Separation**: Local development uses staging bucket (`my-storybooks-staging`), production uses production bucket (`my-storybooks-production`).
-- **Bucket Configuration**: The `wrangler.toml` file defines both production and preview bucket bindings automatically.
+- **Bucket Configuration**: The `wrangler.toml` file defines both `production` and `staging` bucket bindings. The staging Worker retains its `storybook-deployment-service-preview` name.
 
 ## Step 6: Verify Deployment
 

@@ -163,7 +163,7 @@ This guide will walk you through setting up and running the service in both the 
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) (v18 or later)
+- [Node.js](https://nodejs.org/) (v22; CI uses Node 22)
 - [Yarn](https://yarnpkg.com/) (or npm)
 - [Docker](https://www.docker.com/) (optional, for running the Node.js app in a container)
 - A [Cloudflare account](https://dash.cloudflare.com/sign-up) (for the Worker deployment)
@@ -313,163 +313,81 @@ This will upload the worker and configure it according to your `wrangler.toml` f
 
 ## CI/CD Workflows
 
-This project includes comprehensive GitHub Actions workflows for automated testing, building, and deployment.
+`.github/workflows/deploy.yml` is the entry point for validation and deployment.
+It calls the tests-only reusable `.github/workflows/ci.yml` to install from the
+frozen pnpm lockfile, run unit tests with coverage, typecheck, and build. CI uses
+Node 22, pnpm 9, and Wrangler 4.99.0.
 
-### Overview
+| Trigger | Result |
+|---------|--------|
+| Pull request into `stage` or `main` | Tests, coverage, typecheck, and build only |
+| Push to `stage` | Validate, deploy `--env staging`, verify staging `/healthz` |
+| Push to `main` | Validate, deploy `--env production`, verify production `/healthz`, then best-effort Sentry and Docker publishing |
+| Manual dispatch | Validate and deploy the selected `staging` or `production` environment from the selected ref |
 
-The project uses a **two-workflow approach** to ensure code quality and safe deployments:
+Pushes changing only `**/*.md` or `docs/**` do not trigger this workflow. Deploy
+runs use concurrency group `deploy-${{ github.ref }}` with cancellation disabled.
+Each deploy records its GitHub Environment and health URL. Verification must
+report the deployed SHA within six attempts, ten seconds apart, or the job fails.
 
-1. **🔍 CI Validation** (`.github/workflows/ci.yml`) - Validates pull requests and feature branches
-2. **🚀 Production Deploy** (`.github/workflows/deploy.yml`) - Deploys to production after merge
+### Development and promotion
 
-### Workflow Details
+1. Open feature PRs into `stage`; CI runs without deployment credentials.
+2. Merge to `stage` to deploy the shared staging Worker.
+3. Verify staging, then fast-forward `main` to the tested stage commit to promote.
+4. For a hand run, select **Actions → Deploy Service → Run workflow**, choose the
+   ref and environment explicitly. Manual dispatch deploys that selected ref.
 
-#### CI Validation Workflow
+There are no per-PR Workers or automated E2E deploy jobs. Existing E2E tests and
+scripts remain available for explicit runs against a configured target.
 
-**Triggers:**
-- Pull requests to `main` branch
-- Pushes to feature branches (any branch except `main`)
-- Manual workflow dispatch
+### Environment configuration
 
-**Jobs:**
-1. **Unit Tests & Build** - Runs `pnpm run test` and `pnpm run build`
-2. **E2E Tests (Local)** - Tests against local `wrangler dev` environment
-3. **Preview Deployment** - Deploys PR to staging environment
-4. **E2E Tests (Preview)** - Tests against live preview deployment
-5. **Code Quality** - TypeScript validation and code scanning
+| Environment key | Branch | R2 bucket | Worker name |
+|-----------------|--------|-----------|-------------|
+| `staging` | `stage` | `my-storybooks-staging` | `storybook-deployment-service-preview` |
+| `production` | `main` | `my-storybooks-production` | `storybook-deployment-service` |
 
-**Preview Environments:**
-- Each PR gets a unique preview URL: `https://storybook-deployment-service-pr-{number}.scry-demo.workers.dev`
-- Preview deployments use the staging R2 bucket (`my-storybooks-staging`)
-- The workflow automatically comments on PRs with preview links
+The former `preview` key is now `staging`; the Worker name and URL are unchanged.
+The top-level Wrangler configuration still targets production for compatibility;
+the explicit `production` key has the same name, vars, and bindings.
 
-#### Production Deploy Workflow
+Staging produces to `scry-build-processing-staging`, matching build-processing's
+staging consumer. That consumer routes exhausted retries to
+`scry-build-processing-staging-dlq`; upload does not produce directly to the DLQ.
+Production continues to produce to `scry-build-processing`.
 
-**Triggers:**
-- Push to `main` branch (after PR merge)
-- Manual workflow dispatch
+### Setup after merge
 
-**Jobs:**
-1. **Deploy Worker** - Builds, tests, deploys to production, and validates with E2E tests
-2. **Build Docker** - Builds and pushes Docker image to GitHub Container Registry
+Before the first staging deployment, the founder should:
 
-### GitHub Secrets Setup
+- Create `stage` from the merged `main`. Future feature PRs target `stage`.
+- Configure GitHub Environments `staging` and `production` and ensure both can
+  access the existing `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` Actions
+  secrets. Scope any deployment branch restrictions to the intended branches;
+  manual runs also need their selected ref allowed.
+- Populate the existing staging Worker (`--env staging`) with
+  `FIREBASE_PROJECT_ID` (`scry-dev-dashboard-stage`), `FIREBASE_CLIENT_EMAIL`,
+  `FIREBASE_PRIVATE_KEY`, `FIRESTORE_SERVICE_ACCOUNT_ID`, and `SENTRY_DSN`.
+  Presigned uploads also require `R2_ACCOUNT_ID`, `R2_S3_ACCESS_KEY_ID`, and
+  `R2_S3_SECRET_ACCESS_KEY` with access to the staging bucket; `CLEANUP_TOKEN` is
+  required only to enable cleanup. See [the secrets guide](docs/GITHUB_ACTIONS_SECRETS.md).
+- If branch protection is enabled, select the validation check emitted by the
+  reusable workflow; the old `CI Complete` job has been removed.
 
-The workflows require the following secrets to be configured in your repository settings (**Settings** → **Secrets and variables** → **Actions**):
+Staging data isolation is Phase 2: the key rename alone does not configure
+Firebase credentials. No Worker rename, queue creation, D1 migration, or DNS
+change is needed for this phase. GitHub Sentry secrets remain optional for the
+best-effort production release steps; Docker publishing uses `GITHUB_TOKEN`.
 
-#### Required Secrets
+### Health and manual deployment
 
-| Secret Name | Description | Example Value |
-|-------------|-------------|---------------|
-| `CLOUDFLARE_API_TOKEN` | Cloudflare API token with Workers:Edit permission | `your-cloudflare-api-token` |
-| `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare account ID | `` |
-| `R2_S3_ACCESS_KEY_ID` | R2 S3-compatible access key | `` |
-| `R2_S3_SECRET_ACCESS_KEY` | R2 S3-compatible secret key | `` |
-| `R2_ACCOUNT_ID` | R2 account ID (same as Cloudflare account ID) | `` |
-| `R2_BUCKET_NAME` | Production R2 bucket name | `my-storybooks-production` |
+- Staging: <https://storybook-deployment-service-preview.epinnock.workers.dev/healthz>
+- Production: <https://storybook-deployment-service.epinnock.workers.dev/healthz>
 
-#### Setting Up Cloudflare API Token
-
-1. Go to [Cloudflare Dashboard](https://dash.cloudflare.com/)
-2. Click your profile → **My Profile** → **API Tokens**
-3. Click **Create Token** → Use **Edit Cloudflare Workers** template
-4. Configure permissions: `Cloudflare Workers:Edit`
-5. Set account and zone resources as needed
-6. Copy the token and add it as `CLOUDFLARE_API_TOKEN` secret
-
-### Branch Protection Rules
-
-To enforce code quality, set up branch protection rules for the `main` branch:
-
-1. Go to **Settings** → **Branches** in your GitHub repository
-2. Click **Add rule** for the `main` branch
-3. Enable the following settings:
-   - ✅ **Require status checks to pass before merging**
-   - ✅ **Require branches to be up to date before merging**
-   - ✅ **CI Complete** (select this required check)
-   - ✅ **Require pull request reviews before merging**
-   - ✅ **Dismiss stale PR approvals when new commits are pushed**
-
-### Development Workflow
-
-With the CI/CD system in place, the recommended development workflow is:
-
-#### 1. Feature Development
-```bash
-# Create and switch to feature branch
-git checkout -b feature/my-new-feature
-
-# Make your changes
-# ... edit files ...
-
-# Commit and push
-git add .
-git commit -m "feat: add new feature"
-git push origin feature/my-new-feature
-```
-
-#### 2. Pull Request Creation
-1. Create a pull request from your feature branch to `main`
-2. The CI workflow will automatically:
-   - Run unit tests and build checks
-   - Run E2E tests against local development environment
-   - Deploy a preview environment
-   - Run E2E tests against the preview deployment
-   - Comment on the PR with the preview URL
-
-#### 3. Code Review & Testing
-- Reviewers can test the feature using the preview URL
-- All CI checks must pass before the PR can be merged
-- The preview environment automatically updates when you push new commits
-
-#### 4. Merge to Production
-- Once approved and CI passes, merge the PR to `main`
-- The production deploy workflow automatically:
-  - Runs final tests and builds the project
-  - Deploys to Cloudflare Workers production environment
-  - Validates the deployment with E2E tests
-  - Builds and pushes a Docker image to GHCR
-
-### Monitoring Workflows
-
-#### Viewing Workflow Status
-- Go to the **Actions** tab in your GitHub repository
-- Monitor running workflows and view detailed logs
-- Failed workflows will block PR merges (when branch protection is enabled)
-
-#### Manual Workflow Triggers
-Both workflows support manual triggering via `workflow_dispatch`:
-- Go to **Actions** → Select workflow → **Run workflow**
-- Useful for testing or re-running deployments
-
-#### Troubleshooting Common Issues
-
-**❌ CI Workflow Fails:**
-- Check that all GitHub secrets are correctly configured
-- Verify R2 bucket permissions and credentials
-- Review the workflow logs for specific error messages
-
-**❌ Preview Deployment Issues:**
-- Ensure the staging R2 bucket (`my-storybooks-staging`) exists
-- Check Cloudflare API token permissions
-- Verify the `wrangler.toml` preview environment configuration
-
-**❌ Production Deployment Fails:**
-- Confirm production R2 bucket (`my-storybooks-production`) is accessible
-- Check Cloudflare Worker limits and quotas
-- Review E2E test failures in the workflow logs
-
-### Environment Configuration
-
-The project uses different environments for safe development:
-
-| Environment | Purpose | R2 Bucket | Worker Name |
-|-------------|---------|-----------|-------------|
-| **Local Development** | Developer machines | `my-storybooks-staging` | N/A (local) |
-| **PR Preview** | Pull request testing | `my-storybooks-staging` | `storybook-deployment-service-pr-{number}` |
-| **Production** | Live service | `my-storybooks-production` | `storybook-deployment-service` |
-
-This separation ensures that development and testing activities never interfere with production data.
+Use `pnpm run deploy:staging` or `pnpm run deploy:production` for stamped manual
+deployments. `pnpm run deploy:worker` remains an alias for production. Inspect the
+Actions logs if validation or the post-deploy commit check fails.
 
 ## API Endpoints
 
@@ -1021,14 +939,14 @@ same stamp plus its existing `status` and `timestamp`. Both use
 `Cache-Control: no-store`.
 
 CI injects the commit, branch, UTC build time, run ID, actor, and Sentry release as
-Worker vars. It verifies the production commit immediately after deployment
+Worker vars. It verifies the target environment commit immediately after deployment
 (up to six attempts, ten seconds apart). Sentry and Docker publishing run after
 verification and are best effort; a failed verification means the deployment
 has not been confirmed, even if Wrangler's deploy step succeeded.
 
-Use `npm run deploy:worker` or `npm run deploy:preview` for stamped manual deploys.
+Use `pnpm run deploy:production` or `pnpm run deploy:staging` for stamped manual deploys.
 These use the current git commit and branch, build time, and actor `manual`;
-`deployId` is null. The existing preview Worker remains the staging stamp target.
+`deployId` is null. The existing `storybook-deployment-service-preview` Worker is the staging target.
 
 Workers load local credentials from `.dev.vars`; `npm run dev:worker` overrides
 `SCRY_ENV` to `dev`. `npm run dev:node` uses `.env.local` and sets `SCRY_ENV=dev`.
