@@ -8,6 +8,7 @@ import { MockStorageService } from './services/storage/storage.mock.js';
 import { FirestoreServiceNode } from './services/firestore/firestore.node.js';
 import { ApiKeyServiceNode } from './services/apikey/apikey.node.js';
 import type { AppEnv } from './app.js';
+import type { StampBindings } from './deploy-stamp.js';
 import admin from 'firebase-admin';
 
 // This will be used if dotenv is configured for local development
@@ -111,6 +112,14 @@ console.log(`Server is running on http://localhost:${config.port}${isTestMode ? 
 
 // Use the serve adapter to start the Node.js server.
 serve({
-  fetch: nodeApp.fetch,
+  fetch: (request) => nodeApp.fetch(request, {
+    SCRY_ENV: process.env.SCRY_ENV as StampBindings['SCRY_ENV'],
+    SCRY_SERVICE: process.env.SCRY_SERVICE,
+    SCRY_COMMIT: process.env.SCRY_COMMIT,
+    SCRY_BRANCH: process.env.SCRY_BRANCH,
+    SCRY_BUILD_TIME: process.env.SCRY_BUILD_TIME,
+    SCRY_DEPLOY_ID: process.env.SCRY_DEPLOY_ID,
+    SCRY_ACTOR: process.env.SCRY_ACTOR,
+  }),
   port: config.port,
 });

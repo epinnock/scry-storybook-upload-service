@@ -27,7 +27,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -80,7 +80,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -117,7 +117,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -133,12 +133,27 @@ jobs:
           path: dist/
           key: build-${{ github.sha }}
 
+      - name: Set preview build timestamp
+        id: stamp
+        run: echo "built_at=$(date -u +%FT%TZ)" >> "$GITHUB_OUTPUT"
+
       - name: Deploy to Preview
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy --name storybook-deployment-service-pr-${{ github.event.number }} --env preview
+          wranglerVersion: '4.99.0'
+          command: >-
+            deploy --name storybook-deployment-service-pr-${{ github.event.number }} --env preview
+            --var SCRY_SERVICE:storybook-deployment-service-pr-${{ github.event.number }}
+            --var SCRY_COMMIT:${{ github.sha }}
+            --var SCRY_BRANCH:${{ github.ref_name }}
+            --var SCRY_BUILD_TIME:${{ steps.stamp.outputs.built_at }}
+            --var SCRY_DEPLOY_ID:${{ github.run_id }}
+            --var SCRY_ACTOR:${{ github.actor }}
+            --var SENTRY_RELEASE:${{ github.sha }}
+            --tag ${{ github.sha }}
+            --message "${{ github.ref_name }} ${{ github.actor }} run=${{ github.run_id }}"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
@@ -202,7 +217,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -245,7 +260,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4

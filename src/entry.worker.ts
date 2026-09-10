@@ -9,12 +9,13 @@ import { MockStorageService } from './services/storage/storage.mock';
 import { FirestoreServiceWorker } from './services/firestore/firestore.worker';
 import { ApiKeyServiceWorker } from './services/apikey/apikey.worker';
 import type { AppEnv } from './app';
+import type { StampBindings } from './deploy-stamp.js';
 
 /**
  * Defines the specific Cloudflare Bindings expected by this Worker.
  * This provides type safety for c.env.
  */
-type Bindings = {
+type Bindings = StampBindings & {
   // This binding provides access to the R2 bucket for storybooks.
   STORYBOOK_BUCKET: R2Bucket;
 
@@ -56,6 +57,11 @@ const workerApp = new Hono<AppEnv & { Bindings: Bindings }>();
  * and S3 credentials from the environment, then injects it into the context.
  */
 workerApp.use('*', async (c, next) => {
+  // Health reports deployment identity without depending on storage credentials.
+  if (c.req.path === '/health' || c.req.path === '/healthz') {
+    return next();
+  }
+
   // Check if we're in test mode
   const isTestMode = c.env.NODE_ENV === 'test';
   
