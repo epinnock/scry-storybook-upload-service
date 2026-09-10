@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeCoverageInput } from './coverage.js';
+import { extractGitContext, normalizeCoverageInput } from './coverage.js';
 
 describe('normalizeCoverageInput()', () => {
   it('normalizes the spec-style payload into BuildCoverage', () => {
@@ -83,5 +83,46 @@ describe('normalizeCoverageInput()', () => {
         { reportUrl: 'https://r2.example/coverage-report.json' }
       )
     ).toThrow();
+  });
+});
+
+// P13a: scry-sbcov has always written the commit into the coverage report and
+// the normaliser has always dropped it, so a build knew its deploy but not its
+// code (roadmap-open-questions-code-answers.md B.2).
+describe('extractGitContext()', () => {
+  it('reads the coverage report\'s nested git object', () => {
+    expect(
+      extractGitContext({
+        git: {
+          commitSha: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
+          branch: 'main',
+          baseBranch: 'main',
+          baseCommitSha: 'ffff',
+        },
+      })
+    ).toEqual({ commitSha: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678', branch: 'main' });
+  });
+
+  it('accepts a flat commitSha/branch pair', () => {
+    expect(extractGitContext({ commitSha: 'abc1234', branch: 'release' })).toEqual({
+      commitSha: 'abc1234',
+      branch: 'release',
+    });
+  });
+
+  // A report generated with git analysis disabled carries empty strings. That
+  // is the report saying "unknown"; it must not become a build's commit.
+  it('treats the empty strings of a git-less report as unknown', () => {
+    expect(extractGitContext({ git: { commitSha: '', branch: '', baseBranch: null, baseCommitSha: null } })).toEqual({});
+  });
+
+  it('returns nothing for a payload with no git information at all', () => {
+    expect(extractGitContext({ summary: {} })).toEqual({});
+    expect(extractGitContext(undefined)).toEqual({});
+    expect(extractGitContext(null)).toEqual({});
+  });
+
+  it('returns only the member it knows', () => {
+    expect(extractGitContext({ git: { branch: 'main' } })).toEqual({ branch: 'main' });
   });
 });
