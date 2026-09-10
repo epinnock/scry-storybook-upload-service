@@ -306,7 +306,7 @@ docker run -p 3000:3000 -e R2_ACCOUNT_ID=... -e ... storybook-upload-service
 To deploy the service to your Cloudflare account:
 
 ```bash
-wrangler deploy
+npm run deploy:worker
 ```
 
 This will upload the worker and configure it according to your `wrangler.toml` file.
@@ -1010,3 +1010,29 @@ Additional documentation is available in the `docs/` directory:
 - [STORAGE_FLOW_OVERVIEW.md](docs/STORAGE_FLOW_OVERVIEW.md) - Storage architecture overview
 
 Developed 2026 by Scry
+
+
+### Deployment identity
+
+Production health: `https://storybook-deployment-service.epinnock.workers.dev/healthz`.
+`GET /healthz` is public and returns `ok`, `service` (the deployed Worker name),
+`env`, `commit`, `branch`, `builtAt`, `deployId`, and `actor`. `/health` returns the
+same stamp plus its existing `status` and `timestamp`. Both use
+`Cache-Control: no-store`.
+
+CI injects the commit, branch, UTC build time, run ID, actor, and Sentry release as
+Worker vars. It verifies the production commit immediately after deployment
+(up to six attempts, ten seconds apart). Sentry and Docker publishing run after
+verification and are best effort; a failed verification means the deployment
+has not been confirmed, even if Wrangler's deploy step succeeded.
+
+Use `npm run deploy:worker` or `npm run deploy:preview` for stamped manual deploys.
+These use the current git commit and branch, build time, and actor `manual`;
+`deployId` is null. The existing preview Worker remains the staging stamp target.
+
+Workers load local credentials from `.dev.vars`; `npm run dev:worker` overrides
+`SCRY_ENV` to `dev`. `npm run dev:node` uses `.env.local` and sets `SCRY_ENV=dev`.
+The Node entry reads the same `SCRY_*` variables from its process environment.
+Missing environment/commit values default to `dev`; missing optional metadata is
+null. Only stamp fields are exposed. Wrangler is pinned to 4.99.0 for deploy tag
+and message support and uses Node 22 in CI.

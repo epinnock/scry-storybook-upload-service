@@ -10,7 +10,7 @@ on:
 
 env:
   # Sentry release version - uses git SHA for unique identification
-  SENTRY_RELEASE: storybook-upload-service@${{ github.sha }}
+  SENTRY_RELEASE: ${{ github.sha }}
 
 jobs:
   # Job 1: Run tests with coverage before deployment
@@ -24,7 +24,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -78,7 +78,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -94,13 +94,44 @@ jobs:
           path: dist/
           key: build-${{ github.sha }}
 
+      - name: Set build timestamp
+        id: stamp
+        run: echo "built_at=$(date -u +%FT%TZ)" >> "$GITHUB_OUTPUT"
+
       - name: Deploy Worker
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # The 'command' defaults to 'deploy', which is what is needed here.
-          # It will automatically use the wrangler.toml file from the repository root.
+          wranglerVersion: '4.99.0'
+          command: >-
+            deploy
+            --var SCRY_COMMIT:${{ github.sha }}
+            --var SCRY_BRANCH:${{ github.ref_name }}
+            --var SCRY_BUILD_TIME:${{ steps.stamp.outputs.built_at }}
+            --var SCRY_DEPLOY_ID:${{ github.run_id }}
+            --var SCRY_ACTOR:${{ github.actor }}
+            --var SENTRY_RELEASE:${{ github.sha }}
+            --tag ${{ github.sha }}
+            --message "${{ github.ref_name }} ${{ github.actor }} run=${{ github.run_id }}"
+
+      - name: Verify deployed commit
+        shell: bash
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          for attempt in {1..6}; do
+            if curl -4fsS --connect-timeout 10 --max-time 20 \
+              https://storybook-deployment-service.epinnock.workers.dev/healthz \
+              | jq -e --arg commit "$EXPECTED_COMMIT" '.commit == $commit' > /dev/null; then
+              echo "Production verified at $EXPECTED_COMMIT"
+              exit 0
+            fi
+            echo "Verification attempt $attempt/6 failed"
+            if [ "$attempt" -lt 6 ]; then sleep 10; fi
+          done
+          echo "::error::Production did not report the expected commit $EXPECTED_COMMIT"
+          exit 1
 
       # Upload source maps to Sentry for better error stack traces
       - name: Create Sentry Release and Upload Source Maps
@@ -133,6 +164,7 @@ jobs:
 
       # Notify Sentry of successful deployment
       - name: Notify Sentry of Deployment
+        continue-on-error: true
         run: |
           if [ -z "${SENTRY_AUTH_TOKEN}" ] || [ -z "${SENTRY_ORG}" ]; then
             echo "Sentry secrets not configured; skipping deploy notification."
@@ -147,6 +179,7 @@ jobs:
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
 
       - name: Deployment Summary
+        continue-on-error: true
         if: success()
         run: |
           echo "## 🚀 Deployment Successful" >> $GITHUB_STEP_SUMMARY
@@ -159,16 +192,19 @@ jobs:
   build-and-push-docker:
     runs-on: ubuntu-latest
     name: Build and Push Docker Image
-    needs: test-and-coverage
+    needs: deploy-worker
+    continue-on-error: true
     # Grant permissions for the GITHUB_TOKEN to push to the GitHub Container Registry.
     permissions:
       contents: read
       packages: write
     steps:
       - name: Checkout repository
+        continue-on-error: true
         uses: actions/checkout@v4
 
       - name: Log in to GitHub Container Registry
+        continue-on-error: true
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -176,6 +212,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Docker image
+        continue-on-error: true
         uses: docker/build-push-action@v5
         with:
           context: .

@@ -1,6 +1,7 @@
 // In src/app.ts
 
 import { Hono } from 'hono';
+import { deployStamp, type StampBindings } from './deploy-stamp.js';
 import { currentTraceContext } from './trace-context.js';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { createRoute } from '@hono/zod-openapi';
@@ -22,7 +23,7 @@ import { parseMultipartFormData } from './utils/multipart.js';
 
 // Define the application's environment, including injectable variables.
 export type AppEnv = {
-  Bindings: {}; // Bindings will be defined per-target
+  Bindings: StampBindings; // Other bindings will be defined per-target
   Variables: {
     storage: StorageService;
     firestore?: FirestoreService; // Optional to support gradual rollout
@@ -134,6 +135,31 @@ const AuthErrorResponseSchema = z.object({
 });
 
 // Health check route
+const StampSchema = z.object({
+  ok: z.literal(true),
+  service: z.string(),
+  env: z.enum(['staging', 'production', 'dev']),
+  commit: z.string(),
+  branch: z.string().nullable(),
+  builtAt: z.string().nullable(),
+  deployId: z.string().nullable(),
+  actor: z.string().nullable(),
+});
+
+app.openapi(createRoute({
+  method: 'get',
+  path: '/healthz',
+  responses: {
+    200: {
+      description: 'Deployment stamp',
+      content: { 'application/json': { schema: StampSchema } },
+    },
+  },
+}), (c) => {
+  c.header('Cache-Control', 'no-store');
+  return c.json(deployStamp(c.env), 200);
+});
+
 const healthRoute = createRoute({
   method: 'get',
   path: '/health',
@@ -142,7 +168,7 @@ const healthRoute = createRoute({
       description: 'Health status',
       content: {
         'application/json': {
-          schema: z.object({
+          schema: StampSchema.extend({
             status: z.literal('ok'),
             timestamp: z.string().datetime()
           })
@@ -153,7 +179,8 @@ const healthRoute = createRoute({
 });
 
 app.openapi(healthRoute, (c) => {
-  return c.json({ status: 'ok', timestamp: new Date().toISOString() });
+  c.header('Cache-Control', 'no-store');
+  return c.json({ ...deployStamp(c.env), status: 'ok' as const, timestamp: new Date().toISOString() });
 });
 
 // Upload route

@@ -38,6 +38,7 @@ binding = "BUILD_PROCESSING_QUEUE"
 # Example: `wrangler secret put R2_ACCOUNT_ID`
 
 [vars]
+SCRY_ENV = "production"
 # Non-sensitive configuration values
 # NOTE: R2_ACCOUNT_ID is set via secrets for security (even though it's not highly sensitive)
 R2_BUCKET_NAME = "my-storybooks-production"
@@ -57,7 +58,10 @@ R2_BUCKET_NAME = "my-storybooks-production"
 # Preview environment for PR deployments
 [env.preview]
 name = "storybook-deployment-service-preview"
-vars = { R2_BUCKET_NAME = "my-storybooks-staging" }
+
+[env.preview.vars]
+R2_BUCKET_NAME = "my-storybooks-staging"
+SCRY_ENV = "staging"
 
 [[env.preview.r2_buckets]]
 binding = "STORYBOOK_BUCKET"
