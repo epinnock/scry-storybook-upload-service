@@ -59,6 +59,9 @@ export class FirestoreServiceNode implements FirestoreService {
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         createdBy: this.serviceAccountId,
         ...(data.coverage ? { coverage: data.coverage } : {}),
+        // Build provenance (P13a); see CreateBuildData.
+        ...(data.commitSha ? { commitSha: data.commitSha } : {}),
+        ...(data.branch ? { branch: data.branch } : {}),
       };
 
       transaction.set(buildRef, buildData);
@@ -67,6 +70,8 @@ export class FirestoreServiceNode implements FirestoreService {
       return {
         id: buildRef.id,
         projectId,
+        ...(data.commitSha ? { commitSha: data.commitSha } : {}),
+        ...(data.branch ? { branch: data.branch } : {}),
         versionId: data.versionId,
         buildNumber,
         zipUrl: data.zipUrl,

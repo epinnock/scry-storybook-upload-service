@@ -107,6 +107,23 @@ export interface Build {
   createdBy: string;
 
   /**
+   * Full commit SHA the build was produced from, when the CLI could determine
+   * one.
+   *
+   * `versionId` above is a PR number, a branch name, a tag or a short SHA
+   * depending on which CI event fired, so it identifies a deploy and never a
+   * commit. Search reports this as a result's `build_sha`; absent means absent,
+   * and the result reports its freshness as unknown rather than guessing
+   * (P13a).
+   */
+  commitSha?: string;
+
+  /**
+   * Branch the build was produced from, on the same terms as `commitSha`.
+   */
+  branch?: string;
+
+  /**
    * Timestamp when the build was archived (if applicable)
    */
   archivedAt?: Date;
@@ -145,6 +162,16 @@ export interface CreateBuildData {
    * Optional normalized coverage data to store alongside build creation.
    */
   coverage?: BuildCoverage;
+
+  /**
+   * Commit SHA the build was produced from, when known (P13a). Omitted, never
+   * empty — an empty commit on a build document is indistinguishable from a
+   * real one to everything downstream.
+   */
+  commitSha?: string;
+
+  /** Branch the build was produced from, when known (P13a). */
+  branch?: string;
 }
 
 // ============= UPLOAD TYPES =============
@@ -203,4 +230,16 @@ export interface UpdateBuildData {
    * Async processing state for screenshot metadata ingestion.
    */
   processingStatus?: BuildProcessingStatus;
+
+  /**
+   * Commit SHA the build was produced from (P13a).
+   *
+   * Updatable rather than only settable at creation because the commit arrives
+   * on whichever of the coverage upload and the metadata upload runs, and the
+   * build document is created before either.
+   */
+  commitSha?: string;
+
+  /** Branch the build was produced from (P13a). */
+  branch?: string;
 }

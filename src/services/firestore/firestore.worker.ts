@@ -120,6 +120,10 @@ export class FirestoreServiceWorker implements FirestoreService {
       createdAt: { timestampValue: now.toISOString() },
       createdBy: { stringValue: this.config.serviceAccountId },
       ...(data.coverage ? { coverage: this.toFirestoreValue(data.coverage) } : {}),
+      // Build provenance (P13a). versionId identifies a deploy; this identifies
+      // the code. Written only when the uploader knew it.
+      ...(data.commitSha ? { commitSha: { stringValue: data.commitSha } } : {}),
+      ...(data.branch ? { branch: { stringValue: data.branch } } : {}),
     };
 
     console.log('[FIRESTORE] createBuild writing build doc', {
@@ -137,6 +141,8 @@ export class FirestoreServiceWorker implements FirestoreService {
     return {
       id: buildId,
       projectId,
+      ...(data.commitSha ? { commitSha: data.commitSha } : {}),
+      ...(data.branch ? { branch: data.branch } : {}),
       versionId: data.versionId,
       buildNumber,
       zipUrl: data.zipUrl,
@@ -362,6 +368,8 @@ export class FirestoreServiceWorker implements FirestoreService {
     if (updates.archivedBy) fields.archivedBy = { stringValue: updates.archivedBy };
     if (updates.coverage) fields.coverage = this.toFirestoreValue(updates.coverage);
     if (updates.processingStatus) fields.processingStatus = { stringValue: updates.processingStatus };
+    if (updates.commitSha) fields.commitSha = { stringValue: updates.commitSha };
+    if (updates.branch) fields.branch = { stringValue: updates.branch };
 
     await this.patchDocument(buildPath, fields, token);
   }

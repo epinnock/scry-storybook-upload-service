@@ -18,7 +18,7 @@ import type {
 } from './services/firestore/firestore.types.js';
 import type { ApiKeyService } from './services/apikey/apikey.service.js';
 import { apiKeyAuth, type AuthVariables } from './middleware/auth.js';
-import { normalizeCoverageInput } from './coverage/coverage.js';
+import { extractGitContext, normalizeCoverageInput } from './coverage/coverage.js';
 import { parseMultipartFormData } from './utils/multipart.js';
 
 // Define the application's environment, including injectable variables.
@@ -412,6 +412,10 @@ app.openapi(uploadRoute, async (c) => {
                 }) as BuildCoverage,
               }
             : {}),
+          // The coverage report has always carried the commit and branch; the
+          // build document has never kept them, so a search result could name
+          // the deploy but not the code (P13a).
+          ...extractGitContext(coveragePayload),
         };
 
         console.log(`[INFO] Creating build: project=${project}, version=${version}, zipUrl=${result.url}, hasCoverage=${Boolean(buildData.coverage)}`);
@@ -663,6 +667,30 @@ app.openapi(coverageUploadRoute, async (c) => {
     await firestore.updateBuildCoverage(project, build.id, coverage);
     console.log('[COVERAGE] Build coverage updated', { requestId, buildId: build.id });
 
+    // And with where the build came from. Separate from the coverage write
+    // because provenance is not coverage data and outlives it: the build
+    // document is what the indexer reads to stamp build_sha on every row.
+    // Failure here must not fail an upload that has already succeeded — the
+    // rows simply report their freshness as unknown.
+    const gitContext = extractGitContext(coveragePayload);
+    if (gitContext.commitSha || gitContext.branch) {
+      try {
+        await firestore.updateBuild(project, build.id, gitContext);
+        console.log('[COVERAGE] Build provenance recorded', {
+          requestId,
+          buildId: build.id,
+          commitSha: gitContext.commitSha,
+          branch: gitContext.branch,
+        });
+      } catch (e) {
+        console.warn('[COVERAGE] Could not record build provenance', {
+          requestId,
+          buildId: build.id,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
     return c.json(
       {
         success: true,
@@ -683,11 +711,28 @@ app.openapi(coverageUploadRoute, async (c) => {
   }
 });
 
+/**
+ * Where a build came from, sent by the CLI alongside the metadata ZIP.
+ *
+ * Query parameters rather than a body field because the body is the ZIP. Both
+ * are optional: a deploy from a machine with no git context sends neither, and
+ * the build keeps no commit rather than an invented one (P13a).
+ */
+const BuildProvenanceQuerySchema = z.object({
+  commitSha: z
+    .string()
+    .regex(/^[0-9a-fA-F]{7,40}$/, 'commitSha must be a hex git object name')
+    .optional()
+    .openapi({ example: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678' }),
+  branch: z.string().min(1).max(255).optional().openapi({ example: 'main' }),
+});
+
 const metadataUploadRoute = createRoute({
   method: 'post',
   path: '/upload/:project/:version/metadata',
   request: {
     params: ProjectVersionParamsSchema,
+    query: BuildProvenanceQuerySchema,
   },
   responses: {
     201: {
@@ -728,6 +773,7 @@ const metadataUploadRoute = createRoute({
 app.openapi(metadataUploadRoute, async (c) => {
   try {
     const { project, version } = c.req.valid('param');
+    const { commitSha, branch } = c.req.valid('query');
     const storage = c.var.storage;
     const firestore = c.var.firestore;
     const queue = c.var.processingQueue;
@@ -753,6 +799,24 @@ app.openapi(metadataUploadRoute, async (c) => {
 
     const zipKey = `${project}/${version}/builds/${build.buildNumber}/metadata-screenshots.zip`;
     await storage.upload(zipKey, new Blob([body]).stream(), 'application/zip');
+
+    // Record provenance before the build is queued, so the indexer finds it on
+    // the document when it reads the build (it stamps build_sha on every row it
+    // writes). Best effort: a build that indexes without a SHA reports its
+    // freshness as unknown, which is strictly better than not indexing.
+    if (commitSha || branch) {
+      try {
+        await firestore.updateBuild(project, build.id, {
+          ...(commitSha ? { commitSha } : {}),
+          ...(branch ? { branch } : {}),
+        });
+      } catch (e) {
+        console.warn('[METADATA] Could not record build provenance', {
+          buildId: build.id,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
 
     let queued = false;
     if (queue) {

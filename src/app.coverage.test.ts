@@ -180,4 +180,128 @@ describe('coverage endpoints', () => {
       })
     );
   });
+
+  // P13a: the report has always carried the commit; the build document has not,
+  // so search could name the deploy a component came from but not the code.
+  it('POST /upload/:project/:version/coverage records the report\'s commit on the build', async () => {
+    const uploadMock = vi.fn(async (key: string) => ({ url: `https://storage.test/${key}`, path: key }));
+    const storage: StorageService = {
+      upload: uploadMock as any,
+      getPresignedUploadUrl: vi.fn() as any,
+      deleteByPrefix: vi.fn() as any,
+    };
+
+    const updateBuildMock = vi.fn(async () => undefined);
+    const firestore: FirestoreService = {
+      createBuild: vi.fn() as any,
+      getBuild: vi.fn() as any,
+      getProjectBuilds: vi.fn() as any,
+      getBuildByVersion: vi.fn(async () => ({
+        id: 'build-1',
+        projectId: 'my-project',
+        versionId: 'v1.0.0',
+        buildNumber: 1,
+        zipUrl: 'https://storage.test/my-project/v1.0.0/storybook.zip',
+        status: 'active',
+        createdAt: new Date(),
+        createdBy: 'test',
+      })) as any,
+      getLatestBuild: vi.fn() as any,
+      updateBuild: updateBuildMock as any,
+      updateBuildCoverage: vi.fn(async () => undefined) as any,
+      archiveBuild: vi.fn() as any,
+      deleteBuild: vi.fn() as any,
+    };
+
+    const server = createTestServer({ storage, firestore });
+
+    const payload = {
+      git: {
+        commitSha: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
+        branch: 'main',
+        baseBranch: 'main',
+        baseCommitSha: 'ffffffff',
+      },
+      summary: {
+        componentCoverage: 0.9,
+        propCoverage: 0.8,
+        variantCoverage: 0.7,
+        passRate: 0.95,
+        totalComponents: 10,
+        componentsWithStories: 9,
+        failingStories: 1,
+      },
+      qualityGate: { passed: true, checks: [] },
+      generatedAt: '2026-01-01T00:00:00.000Z',
+    };
+
+    const res = await server.request('/upload/my-project/v1.0.0/coverage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    expect(res.status).toBe(201);
+    expect(updateBuildMock).toHaveBeenCalledWith('my-project', 'build-1', {
+      commitSha: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
+      branch: 'main',
+    });
+  });
+
+  // A report from a run with git analysis off carries empty strings, which mean
+  // unknown. Writing them would put a commit nobody can look up on the build.
+  it('POST /upload/:project/:version/coverage writes no provenance for a git-less report', async () => {
+    const uploadMock = vi.fn(async (key: string) => ({ url: `https://storage.test/${key}`, path: key }));
+    const storage: StorageService = {
+      upload: uploadMock as any,
+      getPresignedUploadUrl: vi.fn() as any,
+      deleteByPrefix: vi.fn() as any,
+    };
+
+    const updateBuildMock = vi.fn(async () => undefined);
+    const firestore: FirestoreService = {
+      createBuild: vi.fn() as any,
+      getBuild: vi.fn() as any,
+      getProjectBuilds: vi.fn() as any,
+      getBuildByVersion: vi.fn(async () => ({
+        id: 'build-1',
+        projectId: 'my-project',
+        versionId: 'v1.0.0',
+        buildNumber: 1,
+        zipUrl: 'https://storage.test/my-project/v1.0.0/storybook.zip',
+        status: 'active',
+        createdAt: new Date(),
+        createdBy: 'test',
+      })) as any,
+      getLatestBuild: vi.fn() as any,
+      updateBuild: updateBuildMock as any,
+      updateBuildCoverage: vi.fn(async () => undefined) as any,
+      archiveBuild: vi.fn() as any,
+      deleteBuild: vi.fn() as any,
+    };
+
+    const server = createTestServer({ storage, firestore });
+
+    const res = await server.request('/upload/my-project/v1.0.0/coverage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        git: { commitSha: '', branch: '', baseBranch: null, baseCommitSha: null },
+        summary: {
+          componentCoverage: 0.9,
+          propCoverage: 0.8,
+          variantCoverage: 0.7,
+          passRate: 0.95,
+          totalComponents: 10,
+          componentsWithStories: 9,
+          failingStories: 1,
+        },
+        qualityGate: { passed: true, checks: [] },
+        generatedAt: '2026-01-01T00:00:00.000Z',
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    expect(updateBuildMock).not.toHaveBeenCalled();
+  });
 });

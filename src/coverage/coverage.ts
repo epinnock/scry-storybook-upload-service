@@ -88,6 +88,47 @@ export type NormalizeCoverageOptions = {
 };
 
 /**
+ * The commit and branch a coverage report was generated from.
+ *
+ * scry-sbcov has always written these into the report as `git.commitSha` and
+ * `git.branch` (see the coverage report's GitContext), and the normaliser has
+ * always thrown them away — they reached R2 inside the raw JSON and got no
+ * further, so a build document knew which deploy it was but never which commit
+ * (roadmap-open-questions-code-answers.md B.2).
+ *
+ * Both members are optional and never defaulted. A report generated with git
+ * analysis disabled carries `commitSha: ""`, which is the report's way of
+ * saying "unknown" and must not become a build's commit.
+ */
+export type BuildGitContext = {
+  commitSha?: string;
+  branch?: string;
+};
+
+/**
+ * Pull the build's commit and branch out of a coverage payload.
+ *
+ * Accepts both the report's nested `git` object and a flat `commitSha` /
+ * `branch` pair, because the payload shape has varied before and the cost of
+ * accepting one more spelling is a line.
+ */
+export function extractGitContext(input: unknown): BuildGitContext {
+  const payload = (input ?? {}) as Record<string, any>;
+  const git = (payload.git ?? {}) as Record<string, any>;
+
+  const str = (value: unknown): string | undefined =>
+    typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+
+  const commitSha = str(git.commitSha) ?? str(payload.commitSha);
+  const branch = str(git.branch) ?? str(payload.branch);
+
+  return {
+    ...(commitSha ? { commitSha } : {}),
+    ...(branch ? { branch } : {}),
+  };
+}
+
+/**
  * Normalize multiple client coverage payload shapes into the stable Firestore shape.
  */
 export function normalizeCoverageInput(input: unknown, options: NormalizeCoverageOptions): BuildCoverage {

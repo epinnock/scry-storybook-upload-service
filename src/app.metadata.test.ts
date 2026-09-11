@@ -106,6 +106,134 @@ describe('app metadata route', () => {
     expect(body.buildNumber).toBe(7);
   });
 
+  // P13a: the indexer reads the build document to stamp build_sha on every row
+  // it writes, so a commit that does not land here is lost for that build's life.
+  it('records commitSha and branch on the build when the CLI sends them', async () => {
+    const upload = vi.fn(async (key: string) => ({ url: `https://storage.test/${key}`, path: key }));
+    const storage: StorageService = {
+      upload: upload as any,
+      getPresignedUploadUrl: vi.fn() as any,
+      deleteByPrefix: vi.fn() as any,
+    };
+
+    const latestBuild: Build = {
+      id: 'build-123',
+      projectId: 'my-project',
+      versionId: 'v1.0.0',
+      buildNumber: 7,
+      zipUrl: 'https://storage.test/my-project/v1.0.0/storybook.zip',
+      status: 'active',
+      createdAt: new Date(),
+      createdBy: 'test',
+    };
+    const firestore = createFirestoreMock({ getLatestBuild: vi.fn(async () => latestBuild) });
+    const server = createTestServer({ storage, firestore, queue: { send: vi.fn(async () => undefined) } });
+
+    const res = await server.request(
+      '/upload/my-project/v1.0.0/metadata?commitSha=a1b2c3d4e5f60718293a4b5c6d7e8f9012345678&branch=feature%2Flogin',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/zip' },
+        body: new Uint8Array([80, 75, 3, 4]),
+      }
+    );
+
+    expect(res.status).toBe(201);
+    expect(firestore.updateBuild).toHaveBeenCalledWith('my-project', 'build-123', {
+      commitSha: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
+      branch: 'feature/login',
+    });
+  });
+
+  // An older CLI sends neither, and must keep working exactly as before.
+  it('writes no provenance and still queues when the CLI sends none', async () => {
+    const upload = vi.fn(async (key: string) => ({ url: `https://storage.test/${key}`, path: key }));
+    const send = vi.fn(async () => undefined);
+    const storage: StorageService = {
+      upload: upload as any,
+      getPresignedUploadUrl: vi.fn() as any,
+      deleteByPrefix: vi.fn() as any,
+    };
+
+    const latestBuild: Build = {
+      id: 'build-123',
+      projectId: 'my-project',
+      versionId: 'v1.0.0',
+      buildNumber: 7,
+      zipUrl: 'https://storage.test/my-project/v1.0.0/storybook.zip',
+      status: 'active',
+      createdAt: new Date(),
+      createdBy: 'test',
+    };
+    const firestore = createFirestoreMock({ getLatestBuild: vi.fn(async () => latestBuild) });
+    const server = createTestServer({ storage, firestore, queue: { send } });
+
+    const res = await server.request('/upload/my-project/v1.0.0/metadata', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/zip' },
+      body: new Uint8Array([80, 75, 3, 4]),
+    });
+
+    expect(res.status).toBe(201);
+    expect(firestore.updateBuild).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalled();
+  });
+
+  // Provenance is a nicety; the upload it rides on is not. A build that indexes
+  // without a SHA reports unknown freshness, which beats not indexing.
+  it('still succeeds when recording provenance fails', async () => {
+    const upload = vi.fn(async (key: string) => ({ url: `https://storage.test/${key}`, path: key }));
+    const storage: StorageService = {
+      upload: upload as any,
+      getPresignedUploadUrl: vi.fn() as any,
+      deleteByPrefix: vi.fn() as any,
+    };
+
+    const latestBuild: Build = {
+      id: 'build-123',
+      projectId: 'my-project',
+      versionId: 'v1.0.0',
+      buildNumber: 7,
+      zipUrl: 'https://storage.test/my-project/v1.0.0/storybook.zip',
+      status: 'active',
+      createdAt: new Date(),
+      createdBy: 'test',
+    };
+    const firestore = createFirestoreMock({
+      getLatestBuild: vi.fn(async () => latestBuild),
+      updateBuild: vi.fn(async () => {
+        throw new Error('firestore is having a day');
+      }),
+    });
+    const server = createTestServer({ storage, firestore, queue: { send: vi.fn(async () => undefined) } });
+
+    const res = await server.request('/upload/my-project/v1.0.0/metadata?commitSha=abc1234', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/zip' },
+      body: new Uint8Array([80, 75, 3, 4]),
+    });
+
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects a commitSha that is not a git object name', async () => {
+    const storage: StorageService = {
+      upload: vi.fn() as any,
+      getPresignedUploadUrl: vi.fn() as any,
+      deleteByPrefix: vi.fn() as any,
+    };
+    const firestore = createFirestoreMock();
+    const server = createTestServer({ storage, firestore });
+
+    const res = await server.request('/upload/my-project/v1.0.0/metadata?commitSha=not-a-sha', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/zip' },
+      body: new Uint8Array([80, 75, 3, 4]),
+    });
+
+    expect(res.status).toBe(400);
+  });
+
   it('returns 400 when version parameter contains unsafe characters', async () => {
     const storage: StorageService = {
       upload: vi.fn() as any,
