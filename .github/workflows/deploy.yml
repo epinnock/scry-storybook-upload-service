@@ -8,8 +8,11 @@ on:
       - stage
       - main
     paths-ignore: ['**/*.md', 'docs/**']
+  # ready_for_review: drafts skip CI, so a PR gets its first run when marked ready.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [stage, main]
+    paths-ignore: ['**/*.md', 'docs/**']
   workflow_dispatch:
     inputs:
       environment:
@@ -21,9 +24,11 @@ on:
           - staging
           - production
 
+# PR runs collapse to the newest push. Pushes to stage/main queue per branch and
+# are never cancelled: a deploy must not stop halfway.
 concurrency:
-  group: deploy-${{ github.ref }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -35,10 +40,11 @@ env:
 jobs:
   test-and-coverage:
     name: Tests & Coverage Report
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     uses: ./.github/workflows/ci.yml
 
   deploy-staging:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
     name: Deploy to Staging
     needs: test-and-coverage
     if: >-
@@ -106,7 +112,7 @@ jobs:
 
   # Job 2: Deploy to Cloudflare Workers
   deploy-worker:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
     name: Deploy to Production
     needs: test-and-coverage
     if: >-
@@ -224,7 +230,7 @@ jobs:
 
   # Job 3: Build and Push Docker Image
   build-and-push-docker:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
     name: Build and Push Docker Image
     needs: deploy-worker
     continue-on-error: true
