@@ -334,10 +334,12 @@ report the deployed SHA within six attempts, ten seconds apart, or the job fails
 
 1. Open feature PRs into `stage`; CI runs without deployment credentials.
 2. Merge to `stage` to deploy the shared staging Worker.
-3. Verify staging, then fast-forward `main` to the tested stage commit to promote.
+3. Verify staging, then promote with `scry-management/promote.sh scry-storybook-upload-service`
+   (fast-forwards `main` to the tested stage commit after asking).
 4. For a hand run, select **Actions → Deploy Service → Run workflow**, choose the
    ref and environment explicitly. Manual dispatch deploys that selected ref.
 
+Jobs run on `vars.RUNNER` (self-hosted) and fall back to `ubuntu-latest`.
 There are no per-PR Workers or automated E2E deploy jobs. Existing E2E tests and
 scripts remain available for explicit runs against a configured target.
 
@@ -357,39 +359,49 @@ staging consumer. That consumer routes exhausted retries to
 `scry-build-processing-staging-dlq`; upload does not produce directly to the DLQ.
 Production continues to produce to `scry-build-processing`.
 
-### Setup after merge
+### Secrets per environment
 
-Before the first staging deployment, the founder should:
+GitHub Environments `staging` and `production` provide the `CLOUDFLARE_API_TOKEN`
+and `CLOUDFLARE_ACCOUNT_ID` Actions secrets. Each Worker needs:
 
-- Create `stage` from the merged `main`. Future feature PRs target `stage`.
-- Configure GitHub Environments `staging` and `production` and ensure both can
-  access the existing `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` Actions
-  secrets. Scope any deployment branch restrictions to the intended branches;
-  manual runs also need their selected ref allowed.
-- Populate the existing staging Worker (`--env staging`) with
+- The staging Worker (`--env staging`):
   `FIREBASE_PROJECT_ID` (`scry-dev-dashboard-stage`), `FIREBASE_CLIENT_EMAIL`,
   `FIREBASE_PRIVATE_KEY`, `FIRESTORE_SERVICE_ACCOUNT_ID`, and `SENTRY_DSN`.
   Presigned uploads also require `R2_ACCOUNT_ID`, `R2_S3_ACCESS_KEY_ID`, and
   `R2_S3_SECRET_ACCESS_KEY` with access to the staging bucket; `CLEANUP_TOKEN` is
   required only to enable cleanup. See [the secrets guide](docs/GITHUB_ACTIONS_SECRETS.md).
-- If branch protection is enabled, select the validation check emitted by the
-  reusable workflow; the old `CI Complete` job has been removed.
+- Production: the same names against `my-storybooks-production` and the
+  production Firebase project.
 
-Staging data isolation is Phase 2: the key rename alone does not configure
-Firebase credentials. No Worker rename, queue creation, D1 migration, or DNS
-change is needed for this phase. GitHub Sentry secrets remain optional for the
-best-effort production release steps; Docker publishing uses `GITHUB_TOKEN`.
+GitHub Sentry secrets remain optional for the best-effort production release
+steps; Docker publishing uses `GITHUB_TOKEN`.
 
 ### Health and manual deployment
 
-- Staging: <https://storybook-deployment-service-preview.epinnock.workers.dev/healthz>
-- Production: <https://storybook-deployment-service.epinnock.workers.dev/healthz>
+- Staging: <https://upload-stage.scrymore.com/healthz> (also <https://storybook-deployment-service-preview.epinnock.workers.dev/healthz>)
+- Production: <https://upload.scrymore.com/healthz> (also <https://storybook-deployment-service.epinnock.workers.dev/healthz>)
 
 Use `pnpm run deploy:staging` or `pnpm run deploy:production` for stamped manual
 deployments. `pnpm run deploy:worker` remains an alias for production. Inspect the
 Actions logs if validation or the post-deploy commit check fails.
 
 ## API Endpoints
+
+| Route | Auth | Purpose |
+|---|---|---|
+| `GET /healthz`, `GET /health` | none | Deploy stamp (see Deployment identity) |
+| `POST /upload/:project/:version` | API key | Upload a Storybook ZIP (optional coverage); queues build processing |
+| `POST /upload/:project/:version/coverage` | API key | Attach a coverage report to a build |
+| `POST /upload/:project/:version/metadata` | API key | Upload the metadata/screenshot ZIP and queue processing |
+| `GET /upload/:project/:version` | API key | File info for an uploaded build |
+| `POST /presigned-url/:project/:version/:filename` | API key | Presigned R2 PUT URL + Firestore build record |
+| `POST /upload-images/:project`, `.../complete` | API key | Presigned image-set upload for image indexing |
+| `DELETE /cleanup/:project/:version` | `CLEANUP_TOKEN` | Delete a build (disabled when the secret is unset) |
+| `GET /docs` | none | Swagger UI |
+
+Bindings (`wrangler.toml`): R2 `STORYBOOK_BUCKET` (`my-storybooks-{staging,production}`)
+and queue producer `BUILD_PROCESSING_QUEUE` (`scry-build-processing[-staging]`, consumed by
+scry-build-processing-service). Queue messages carry trace context for the downstream Langfuse trace.
 
 ### Authentication
 
@@ -932,7 +944,7 @@ Developed 2026 by Scry
 
 ### Deployment identity
 
-Production health: `https://storybook-deployment-service.epinnock.workers.dev/healthz`.
+Production health: `https://upload.scrymore.com/healthz` (stage: `https://upload-stage.scrymore.com/healthz`).
 `GET /healthz` is public and returns `ok`, `service` (the deployed Worker name),
 `env`, `commit`, `branch`, `builtAt`, `deployId`, and `actor`. `/health` returns the
 same stamp plus its existing `status` and `timestamp`. Both use
