@@ -168,21 +168,14 @@ const handler: ExportedHandler<Bindings> = {
   },
 };
 
-/**
- * Export the final object that conforms to the Cloudflare Module Worker standard.
- * The runtime will invoke the 'fetch' method for each incoming HTTP request.
- * 
- * Wrapped with Sentry's withSentry for:
- * - Automatic error capturing and reporting
- * - Performance monitoring and tracing
- * - Request context enrichment
- * - Proper use of ctx.waitUntil for async event delivery
- */
-export default Sentry.withSentry(
-  (env: Bindings) => ({
+/** Sentry options, exported for tests (the tier → environment mapping). */
+export function sentryOptions(env: Bindings) {
+  return {
     dsn: env.SENTRY_DSN,
-    // Environment helps distinguish between production, staging, development
-    environment: env.SENTRY_ENVIRONMENT || env.NODE_ENV || 'production',
+    // The tier (observability-request-id): SCRY_ENV is set on every wrangler
+    // env (staging | production). SENTRY_ENVIRONMENT stays as a local override
+    // (.dev.vars). Never a silent 'production' fallback.
+    environment: env.SENTRY_ENVIRONMENT || env.SCRY_ENV || 'unknown',
     // Release version for tracking deployments and source maps
     release: env.SENTRY_RELEASE,
     // Tracing quota is a much smaller budget than errors, so this is a
@@ -193,8 +186,9 @@ export default Sentry.withSentry(
     tracesSampleRate: env.SENTRY_TRACES_SAMPLE_RATE
       ? Number(env.SENTRY_TRACES_SAMPLE_RATE)
       : 1.0,
-    // Enable debug mode in non-production environments
-    debug: env.NODE_ENV !== 'production',
+    // SDK debug logging off on every tier: NODE_ENV is unset on the Workers, so
+    // the old `NODE_ENV !== 'production'` turned it on in production and stage.
+    debug: false,
     // Attach request data to events for better debugging
     sendDefaultPii: false,
     // This service authenticates with an X-API-Key header carrying a customer's
@@ -215,7 +209,7 @@ export default Sentry.withSentry(
       },
     },
     // Before sending an event, you can modify or drop it
-    beforeSend(event, hint) {
+    beforeSend(event: Sentry.ErrorEvent, _hint: Sentry.EventHint) {
       // Don't send events in test mode
       if (env.NODE_ENV === 'test') {
         return null;
@@ -223,6 +217,20 @@ export default Sentry.withSentry(
       // Strip credentials last, so nothing added above can slip past it.
       return scrubEvent(event);
     },
-  }),
+  };
+}
+
+/**
+ * Export the final object that conforms to the Cloudflare Module Worker standard.
+ * The runtime will invoke the 'fetch' method for each incoming HTTP request.
+ * 
+ * Wrapped with Sentry's withSentry for:
+ * - Automatic error capturing and reporting
+ * - Performance monitoring and tracing
+ * - Request context enrichment
+ * - Proper use of ctx.waitUntil for async event delivery
+ */
+export default Sentry.withSentry(
+  (env: Bindings) => sentryOptions(env),
   handler as ExportedHandler
 );
